@@ -1,3 +1,12 @@
+import sys
+import os
+
+# 1. 当前脚本绝对路径
+script_dir = os.path.dirname(os.path.abspath(__file__))
+# 2. 项目根目录（autolab 的上一级）
+project_root = os.path.abspath(os.path.join(script_dir, "../.."))
+sys.path.insert(0, project_root)
+
 import streamlit as st
 from autolab.core.task_flow import TaskFlow
 from autolab.core.agent_manager import AgentManager
@@ -29,13 +38,11 @@ def_goal = "提升气象大模型的预测准确率"
 user_goal = st.text_input("实验目标", def_goal, key="goal_input")
 run_btn = st.button("运行实验流")
 
-# 确保多次运行不会因 import 路径问题报错
 os.environ["PYTHONPATH"] = os.getcwd()
 
 def run_taskflow(goal):
     try:
-        agent_manager = AgentManager()
-        task_flow = TaskFlow(agent_manager)
+        task_flow = TaskFlow()  # 不传 agent_manager 参数
         result = task_flow.run_flow({"goal": goal})
         return result, None
     except Exception as e:
@@ -49,16 +56,18 @@ if run_btn and user_goal.strip():
     elif result:
         st.success("实验流已完成！")
         for key, val in result.items():
-            with st.expander(f"{key} 智能体输出", expanded=True):
-                if isinstance(val, dict):
-                    for sk, sv in val.items():
-                        if sk.endswith("llm_raw") or sk == "llm_raw":
-                            continue
-                        st.write(f"**{sk}**:", sv)
-                    if "llm_raw" in val:
-                        with st.expander("原始 LLM 响应"):
-                            st.code(val["llm_raw"], language="text")
-                else:
-                    st.write(val)
+            st.markdown(f"### {key} 智能体输出")
+            if isinstance(val, dict):
+                # 结构化主信息
+                for sk, sv in val.items():
+                    if sk.endswith("llm_raw") or sk == "llm_raw":
+                        continue
+                    st.write(f"**{sk}**:", sv)
+                # 原始 LLM 响应单独用 code 展示，避免嵌套 expander
+                if "llm_raw" in val:
+                    st.markdown("**原始 LLM 响应：**")
+                    st.code(val["llm_raw"], language="text")
+            else:
+                st.write(val)
 else:
     st.info("请在上方输入实验目标，然后点击“运行实验流”按钮。")
