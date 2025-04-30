@@ -1,6 +1,7 @@
 from .base import BaseAgent
 from typing import Any, Dict
 from autolab.utils.llm_client import ollama_client
+import json
 
 class ComputationExecutorAgent(BaseAgent):
     """
@@ -13,29 +14,19 @@ class ComputationExecutorAgent(BaseAgent):
         robot_result = task.get("robot", {})
         executed = robot_result.get("executed_instructions", [])
         log = robot_result.get("log", "无实验日志")
-        # 构造 prompt，融合实验指令与日志
-        instructions_text = "\n".join(executed) if executed else "无实验指令"
+        # 构造结构化 prompt，要求 LLM 输出 JSON
+        instructions_text = ", ".join([i.get("instruction", str(i)) if isinstance(i, dict) else str(i) for i in executed]) if executed else "无实验指令"
         prompt = (
-            f"你是一位自动化实验室的数据分析与优化智能体。请根据以下实验执行指令和日志，总结实验结果，分析潜在问题，并提出优化建议。\n"
-            f"实验指令：\n{instructions_text}\n实验日志：{log}"
+            f"你是自动化实验室的数据分析与优化智能体。请根据实验执行指令“{instructions_text}”和日志“{log}”，输出JSON格式的分析结果，包含summary, recommendation字段。例如："
+            '{"summary": "...", "recommendation": "..."}'
         )
         llm_response = ollama_client.send_prompt(prompt)
-        # 结构化解析 LLM 输出
-        analysis = {
-            "summary": "",
-            "recommendation": "",
-            "raw_log": log,
-            "llm_raw": llm_response
-        }
+        # 尝试结构化解析
+        analysis = {"summary": "", "recommendation": "", "raw_log": log, "llm_raw": llm_response}
         try:
-            lines = [l.strip() for l in llm_response.split("\n") if l.strip()]
-            for line in lines:
-                if "总结" in line or "结果" in line:
-                    analysis["summary"] += line + " "
-                elif "建议" in line or "优化" in line:
-                    analysis["recommendation"] += line + " "
-            if not (analysis["summary"] or analysis["recommendation"]):
-                analysis["summary"] = llm_response
+            data = json.loads(llm_response)
+            analysis["summary"] = data.get("summary", "")
+            analysis["recommendation"] = data.get("recommendation", "")
         except Exception:
             analysis["summary"] = llm_response
         print(f"[ComputationExecutorAgent] LLM分析与优化: {analysis}")

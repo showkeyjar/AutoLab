@@ -1,6 +1,7 @@
 from .base import BaseAgent
 from typing import Any, Dict
 from autolab.utils.llm_client import ollama_client
+import json
 
 class RobotOperatorAgent(BaseAgent):
     """
@@ -12,22 +13,18 @@ class RobotOperatorAgent(BaseAgent):
     def handle(self, task: Dict[str, Any]) -> Any:
         scheme = task.get("design", {})
         steps = scheme.get("steps", [])
-        # 构造 prompt，融合实验方案内容
-        steps_text = "\n".join(steps) if steps else "无实验步骤"
+        # 构造结构化 prompt，要求 LLM 输出 JSON
+        steps_text = ", ".join([s.get("desc", str(s)) if isinstance(s, dict) else str(s) for s in steps]) if steps else "无实验步骤"
         prompt = (
-            f"你是一位自动化实验室的机器人操控智能体。请根据以下实验方案，生成详细的实验仪器操作指令，包含关键参数设置和注意事项。\n"
-            f"实验方案：\n{steps_text}"
+            f"你是自动化实验室的机器人操控智能体。请根据实验方案步骤“{steps_text}”，输出JSON格式的仪器操作指令数组，每条含instruction, params字段。例如："
+            '{"instructions": [{"instruction": "...", "params": {...}}, ...]}'
         )
         llm_response = ollama_client.send_prompt(prompt)
-        # 结构化解析 LLM 输出
+        # 尝试结构化解析
         instructions = []
         try:
-            for line in llm_response.split("\n"):
-                line = line.strip()
-                if line and (line[0].isdigit() or line.startswith("-")):
-                    instructions.append(line)
-            if not instructions:
-                instructions = [llm_response]
+            data = json.loads(llm_response)
+            instructions = data.get("instructions", [])
         except Exception:
             instructions = [llm_response]
         execution_result = {
