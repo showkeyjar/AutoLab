@@ -7,6 +7,7 @@ from autolab.agents.computation_executor import ComputationExecutorAgent
 class AgentManager:
     """
     智能体注册与调度管理器，统一管理所有智能体实例。
+    支持动态注册/注销智能体。
     """
     def __init__(self):
         self.agents = {
@@ -16,6 +17,13 @@ class AgentManager:
             "robot_operator": RobotOperatorAgent(),
             "computation_executor": ComputationExecutorAgent(),
         }
+
+    def register_agent(self, name: str, agent):
+        self.agents[name] = agent
+
+    def unregister_agent(self, name: str):
+        if name in self.agents:
+            del self.agents[name]
 
     def get_agent(self, agent_name: str):
         return self.agents.get(agent_name)
