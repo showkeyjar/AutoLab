@@ -1,5 +1,6 @@
 from .base import BaseAgent
 from typing import Any, Dict
+from autolab.utils.llm_client import ollama_client
 
 class ComputationExecutorAgent(BaseAgent):
     """
@@ -9,14 +10,33 @@ class ComputationExecutorAgent(BaseAgent):
         super().__init__(name="ComputationExecutorAgent")
 
     def handle(self, task: Dict[str, Any]) -> Any:
-        # 简单模拟数据分析与反馈
         robot_result = task.get("robot", {})
         executed = robot_result.get("executed_instructions", [])
-        # 模拟分析结论
+        log = robot_result.get("log", "无实验日志")
+        # 构造 prompt，融合实验指令与日志
+        instructions_text = "\n".join(executed) if executed else "无实验指令"
+        prompt = (
+            f"你是一位自动化实验室的数据分析与优化智能体。请根据以下实验执行指令和日志，总结实验结果，分析潜在问题，并提出优化建议。\n"
+            f"实验指令：\n{instructions_text}\n实验日志：{log}"
+        )
+        llm_response = ollama_client.send_prompt(prompt)
+        # 结构化解析 LLM 输出
         analysis = {
-            "summary": f"共执行{len(executed)}步实验，全部成功。",
-            "recommendation": "可尝试调整实验参数以进一步优化结果。",
-            "raw_log": robot_result.get("log", "无实验日志")
+            "summary": "",
+            "recommendation": "",
+            "raw_log": log,
+            "llm_raw": llm_response
         }
-        print(f"[ComputationExecutorAgent] 分析与反馈: {analysis}")
+        try:
+            lines = [l.strip() for l in llm_response.split("\n") if l.strip()]
+            for line in lines:
+                if "总结" in line or "结果" in line:
+                    analysis["summary"] += line + " "
+                elif "建议" in line or "优化" in line:
+                    analysis["recommendation"] += line + " "
+            if not (analysis["summary"] or analysis["recommendation"]):
+                analysis["summary"] = llm_response
+        except Exception:
+            analysis["summary"] = llm_response
+        print(f"[ComputationExecutorAgent] LLM分析与优化: {analysis}")
         return analysis

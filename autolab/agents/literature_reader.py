@@ -1,5 +1,6 @@
 from .base import BaseAgent
 from typing import Any, Dict
+from autolab.utils.llm_client import ollama_client
 
 class LiteratureReaderAgent(BaseAgent):
     """
@@ -9,15 +10,22 @@ class LiteratureReaderAgent(BaseAgent):
         super().__init__(name="LiteratureReaderAgent")
 
     def handle(self, task: Dict[str, Any]) -> Any:
-        # 简单模拟文献检索和知识整合
         user_goal = task.get("user_task", {}).get("goal") if isinstance(task.get("user_task"), dict) else task.get("goal")
         if not user_goal:
             user_goal = "未知目标"
-        # 假设返回3条相关文献
-        papers = [
-            {"title": f"关于{user_goal}的最新研究进展", "year": 2024},
-            {"title": f"{user_goal}的自动化实验方法综述", "year": 2023},
-            {"title": f"多智能体系统在{user_goal}中的应用", "year": 2022}
-        ]
-        print(f"[LiteratureReaderAgent] 检索到相关文献: {papers}")
-        return {"papers": papers, "goal": user_goal}
+        # 构造prompt
+        prompt = f"请根据最新文献，列举3条与‘{user_goal}’相关的化学实验研究进展，并简要说明每条的意义。格式：1. ... 2. ... 3. ..."
+        llm_response = ollama_client.send_prompt(prompt)
+        # 简单结构化解析（如遇异常则原样返回）
+        papers = []
+        try:
+            for idx, line in enumerate(llm_response.split("\n")):
+                line = line.strip()
+                if line and (line[0].isdigit() or line.startswith("-")):
+                    papers.append({"desc": line})
+            if not papers:
+                papers = [{"desc": llm_response}]
+        except Exception:
+            papers = [{"desc": llm_response}]
+        print(f"[LiteratureReaderAgent] LLM文献检索结果: {papers}")
+        return {"papers": papers, "goal": user_goal, "llm_raw": llm_response}

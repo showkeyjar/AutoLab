@@ -1,0 +1,70 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+*.egg
+*.log
+*.sqlite3
+
+# Jupyter/IPython
+.ipynb_checkpoints/
+
+# VSCode/IDE
+.vscode/
+.idea/
+*.sublime-workspace
+*.sublime-project
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Streamlit/Gradio
+.streamlit/
+
+# Env
+.env
+.env.*
+.venv/
+venv/
+ENV/
+
+# Test/Temp
+*.tmp
+*.bak
+*.swp
+*.~
+.cache/
+*.pytest_cache/
+
+# Data/Results
+/data/
+/results/
+/output/
+*.csv
+*.tsv
+*.xlsx
+*.h5
+*.pt
+*.pth
+*.ckpt
+*.npz
+*.npy
+
+# Ollama/LLM
+ollama.log
+ollama.db
+
+# Windows
+*.db
+*.exe
+*.dll
+*.bat
+*.cmd
+
+# Misc
+*.orig
+*.lock
