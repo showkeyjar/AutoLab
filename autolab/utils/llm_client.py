@@ -1,11 +1,14 @@
 import requests
+import threading
 from typing import Optional
 
 class OllamaClient:
-    def __init__(self, base_url: str = "http://localhost:11434/api/generate", default_model: str = "llama3"):
-        self.base_url = base_url.rstrip('/api/generate')  # 移除末尾的 '/api/generate'
+    base_url = "http://localhost:11434"  # 类属性
+    
+    def __init__(self):
+        self._stop_event = threading.Event()
         self.available_models = self._get_available_models()
-        self.default_model = self.available_models[0] if self.available_models else default_model
+        self.default_model = self.available_models[0] if self.available_models else "llama3"
 
     def _get_available_models(self):
         """获取Ollama服务可用模型列表"""
@@ -29,20 +32,27 @@ class OllamaClient:
         if not self.is_healthy():
             raise RuntimeError("Ollama服务不可用，请检查服务状态")
 
-    def send_prompt(self, prompt: str, model: Optional[str] = None) -> str:
+    def stop(self):
+        """触发停止信号"""
+        self._stop_event.set()
+
+    def send_prompt(self, prompt: str, model: Optional[str] = None, timeout: int = 60) -> str:
+        """可中断的请求方法"""
         model = model or self.default_model
-        payload = {
-            "model": model,
-            "prompt": prompt,
-            "stream": False
-        }
+        self._stop_event.clear()
+        
         try:
-            resp = requests.post(f"{self.base_url}/api/generate", json=payload, timeout=60)
-            resp.raise_for_status()
-            data = resp.json()
-            # Ollama 返回格式：{"response": "..."}
-            return data.get("response", "")
-        except Exception as e:
-            return f"[LLM调用失败] {str(e)}"
+            response = requests.post(
+                f"{self.base_url}/api/generate",
+                json={"model": model, "prompt": prompt, "stream": False},
+                timeout=timeout,
+                hooks={'response': lambda r, *args, **kwargs: self._stop_event.is_set() and r.close()}
+            )
+            response.raise_for_status()
+            return response.json().get("response", "")
+        except requests.exceptions.RequestException as e:
+            if self._stop_event.is_set():
+                raise RuntimeError("LLM请求已被用户中断")
+            raise
 
 ollama_client = OllamaClient()

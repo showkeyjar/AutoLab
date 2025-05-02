@@ -6,10 +6,15 @@ A multi-agent-driven robotic AI autonomous laboratory for research
 1. Clone this repository:
    ```
    git clone https://github.com/knifecms/AutoLab.git
+   cd AutoLab
    ```
-2. Install dependencies:
+2. Install as editable package:
    ```
-   pip install -r requirements.txt
+   pip install -e .
+   ```
+3. Run the application:
+   ```
+   streamlit run autolab/ui/streamlit_app.py
    ```
 
 ## Setup

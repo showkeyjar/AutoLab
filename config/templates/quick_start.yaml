@@ -1,0 +1,8 @@
+metrics:
+  accuracy:
+    enabled: true
+    threshold: 0.8
+steps:
+- prepare
+- train
+- evaluate

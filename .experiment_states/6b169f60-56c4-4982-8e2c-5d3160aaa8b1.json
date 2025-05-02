@@ -1,0 +1,30 @@
+{
+  "goal": "提升气象大模型的预测准确率",
+  "result": {
+    "success": false,
+    "metrics": {
+      "accuracy": 0.0,
+      "time_cost": 0.0
+    },
+    "actions": [],
+    "output": null,
+    "error": "AgentManager.dispatch() missing 1 required positional argument: 'task'"
+  },
+  "history": [],
+  "config": {
+    "ollama_model": "gemma3:12b",
+    "metrics_cfg": {
+      "accuracy": {
+        "enabled": true,
+        "threshold": 0.8,
+        "calculation": "correct_count / total_count"
+      },
+      "time_cost": {
+        "enabled": true,
+        "threshold": 60.0
+      },
+      "custom": []
+    }
+  },
+  "last_updated": "2025-05-02T12:23:44.643185"
+}

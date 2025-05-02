@@ -1,0 +1,11 @@
+metrics:
+  mae:
+    threshold: 0.1
+  time_cost:
+    threshold: 300
+steps:
+- 数据预处理
+- 特征生成
+- 模型训练
+- 预测
+- 可视化

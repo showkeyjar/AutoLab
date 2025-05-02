@@ -1,0 +1,8 @@
+metrics:
+  accuracy:
+    threshold: 0.85
+steps:
+- 数据加载
+- 特征工程
+- 模型训练
+- 评估

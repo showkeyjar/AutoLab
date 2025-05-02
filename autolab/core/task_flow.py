@@ -12,7 +12,8 @@ class TaskFlow:
     def __init__(self):
         self.agent_manager = AgentManager()
         self.optimizer = ParamOptimizer()
-
+        self._should_stop = False
+        
     def auto_save_state(func):
         """自动保存实验状态的装饰器"""
         def wrapper(self, *args, **kwargs):
@@ -24,6 +25,10 @@ class TaskFlow:
                 )
             return result
         return wrapper
+
+    def stop(self):
+        """标记需要停止"""
+        self._should_stop = True
 
     @auto_save_state
     def run_flow(self, user_task: dict):
@@ -39,6 +44,9 @@ class TaskFlow:
         best_score = -1
         
         for attempt in range(max_attempts):
+            if self._should_stop:
+                raise RuntimeError("实验流程已被用户中断")
+            
             try:
                 # 1. Run the full experiment flow
                 task_manager_result = self.agent_manager.dispatch("task_manager", user_task)
@@ -218,3 +226,29 @@ class TaskFlow:
         if summary:
             return 0.5, "有实验总结"
         return 0.0, "无有效结果"
+
+    def run_flow(self, task_input):
+        """执行任务流并返回结果"""
+        result = {
+            'success': False,
+            'metrics': {'accuracy': 0.0, 'time_cost': 0.0},
+            'actions': [],
+            'output': None
+        }
+        
+        try:
+            start_time = time.time()
+            output = self.agent_manager.dispatch(task_input)
+            result.update({
+                'success': True,
+                'output': output,
+                'actions': getattr(output, 'actions', []),
+                'metrics': {
+                    'accuracy': self._calculate_accuracy(output),
+                    'time_cost': time.time() - start_time
+                }
+            })
+        except Exception as e:
+            result['error'] = str(e)
+            
+        return result
