@@ -1,0 +1,30 @@
+# UI Configuration for Experiment Target Visualization
+
+dashboard:
+  experiment_targets:
+    layout:
+      - objectives_panel: left
+      - parameters_panel: right
+      - visualization_area: center
+      - metrics_panel: bottom  # New metrics panel
+    
+    # New metrics display settings
+    metrics:
+      default_metrics: [accuracy, efficiency, reproducibility]
+      chart_type: radar  # Can be radar, bar, or line
+      color_scheme: viridis
+      
+    themes:
+      default: light
+      available: [light, dark, high_contrast]
+    features:
+      realtime_update: true
+      parameter_editing: true
+      history_view: true
+      metrics_customization: true  # New feature flag
+
+access_control:
+  roles:
+    admin: full_access
+    researcher: edit_access
+    viewer: read_only

@@ -1,0 +1,57 @@
+# Agent Tools Configuration
+# Exposes browser and MCP tool capabilities
+
+browser:
+  enabled: true
+  settings:
+    headless: false  # Run browser in headless mode
+    timeout: 30      # Page load timeout in seconds
+    user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+    plugins:         # Browser plugins/extensions
+      - adblock
+      - password_manager
+
+mcp:
+  enabled: true
+  settings:
+    protocol_version: 1.2
+    max_connections: 5
+    timeout: 60      # Connection timeout in seconds
+    retry_attempts: 3
+
+experiment_targets:
+  enabled: true
+  settings:
+    default_objectives:
+      - material_synthesis
+      - data_analysis
+      - process_optimization
+    custom_objectives: true  # Allow custom target definition
+    metrics:
+      accuracy:
+        min: 0
+        max: 1
+        threshold: 0.8
+      efficiency:
+        min: 0
+        max: 100
+        threshold: 85
+      reproducibility:
+        min: 0
+        max: 5
+        threshold: 4
+    validation:
+      min_parameters: 3
+      max_parameters: 20
+    visualization:
+      enabled: true
+      refresh_interval: 5  # seconds
+    retry_policy:
+      max_attempts: 10
+      action_variation: 0.3  # Minimum required variation between attempts
+      cooling_period: 5     # Seconds between attempts
+      manual_interrupt: true
+
+logging:
+  level: info       # debug, info, warning, error
+  path: ./logs/agent_tools.log
