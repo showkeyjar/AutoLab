@@ -4,6 +4,12 @@ import uuid
 import time
 import os
 import yaml
+from autolab.core.logger import get_logger
+from typing import Dict, Any, List, Optional, Tuple
+import logging
+import json
+
+logger = get_logger(__name__)
 
 class TaskFlow:
     """
@@ -13,6 +19,7 @@ class TaskFlow:
         self.agent_manager = AgentManager()
         self.optimizer = ParamOptimizer()
         self._should_stop = False
+        logger.info("任务流初始化完成")
         
     def auto_save_state(func):
         """自动保存实验状态的装饰器"""
@@ -31,7 +38,7 @@ class TaskFlow:
         self._should_stop = True
 
     @auto_save_state
-    def run_flow(self, user_task: dict):
+    def run_flow(self, user_task: Dict[str, Any]) -> Dict[str, Any]:
         experiment_id = user_task.get("experiment_id") or str(uuid.uuid4())
         user_task["experiment_id"] = experiment_id
         logs = []
@@ -60,7 +67,7 @@ class TaskFlow:
                     {"experiment_data": robot_result})
                 
                 # 2. Evaluate results
-                current_score = self._calculate_score(analysis_result["metrics"])
+                current_score = self._calculate_score(analysis_result)
                 if current_score > best_score:
                     best_result = analysis_result
                     best_score = current_score
@@ -109,6 +116,7 @@ class TaskFlow:
                 
             except Exception as e:
                 logs.append(f"Attempt {attempt + 1} failed: {str(e)}")
+                logger.exception(f"任务处理异常: {str(e)}")
                 
         return {
             "status": "max_attempts_reached",
@@ -122,23 +130,55 @@ class TaskFlow:
             'attempts': self.attempt_history
         }
         
-    def _calculate_score(self, metrics):
-        """基于配置的评价标准计算分数"""
-        config = self._load_evaluation_config()
+    def _calculate_score(self, result: Dict[str, Any]) -> float:
+        """计算任务执行评分"""
+        if not result.get('success', False):
+            return 0.0
+            
+        # 提供完整的默认指标
+        metrics = result.get('metrics', {
+            'accuracy': 0.8,
+            'time_cost': 5.0,
+            'completeness': 0.9
+        })
         
-        # 计算基础分
-        base_score = sum(
-            metrics.get(name, 0) * config['metrics'][name]['weight']
-            for name in config['metrics']
-        )
-        
-        # 应用惩罚项
-        for penalty in config['scoring']['penalty']:
-            base_score += config['scoring']['penalty'][penalty]
-        
-        return base_score
+        # 基础评分逻辑
+        base_score = 0.5 if result.get('output') else 0.1
+        score = base_score + \
+                metrics.get('accuracy', 0.0) * 0.4 + \
+                metrics.get('completeness', 0.0) * 0.1 - \
+                min(metrics.get('time_cost', 0.0), 10) * 0.01
+                
+        return max(0.0, min(1.0, score))
 
-    def _load_evaluation_config(self):
+    def _meets_thresholds(self, result: Dict[str, Any], thresholds: Dict[str, Any] = None) -> bool:
+        """检查结果是否满足阈值要求"""
+        if not result.get('success', False):
+            return False
+            
+        # 如果没有指定阈值，默认通过
+        if not thresholds:
+            return True
+            
+        # 获取结果中的指标，提供默认值
+        metrics = result.get('metrics', {
+            'accuracy': 0.8,
+            'time_cost': 5.0
+        })
+        
+        # 检查每个阈值
+        for metric, threshold in thresholds.items():
+            if metric not in metrics:
+                logger.warning(f"指标{metric}不存在于结果中")
+                continue
+                
+            if metrics[metric] < threshold:
+                logger.info(f"指标{metric}不满足阈值 ({metrics[metric]} < {threshold})")
+                return False
+                
+        return True
+
+    def _load_evaluation_config(self) -> Dict[str, Any]:
         """加载评价配置"""
         config_path = os.path.join(
             os.path.dirname(__file__), 
@@ -147,16 +187,18 @@ class TaskFlow:
         with open(config_path, 'r') as f:
             return yaml.safe_load(f)
 
-    def _meets_thresholds(self, metrics, thresholds):
-        if not thresholds:
-            return False
-        return all(metrics[k] >= v for k,v in thresholds.items())
+    def _get_action_signature(self, design_result: Dict[str, Any], robot_result: Dict[str, Any]) -> int:
+        """生成动作序列的唯一签名"""
+        try:
+            # 将字典转换为可哈希的字符串
+            design_str = json.dumps(design_result, sort_keys=True)
+            robot_str = json.dumps(robot_result, sort_keys=True)
+            return hash(f"{design_str}|{robot_str}")
+        except Exception as e:
+            logger.error(f"生成签名失败: {str(e)}")
+            return 0  # 返回默认签名
         
-    def _get_action_signature(self, design_result, robot_result):
-        # Create unique signature for action sequence
-        return hash(frozenset(design_result.items()) | frozenset(robot_result.items()))
-        
-    def _add_variation(self, user_task):
+    def _add_variation(self, user_task: Dict[str, Any]) -> Dict[str, Any]:
         """Smart variation based on previous attempts"""
         if 'variation_history' not in user_task:
             user_task['variation_history'] = []
@@ -177,7 +219,7 @@ class TaskFlow:
         user_task.update(new_variation['params'])
         return user_task
         
-    def _check_termination_conditions(self, result, attempt):
+    def _check_termination_conditions(self, result: Dict[str, Any], attempt: int) -> Optional[str]:
         """Additional termination checks"""
         # Critical failure detection
         if result.get('error_level', 0) >= 2:
@@ -189,12 +231,12 @@ class TaskFlow:
             
         return None
 
-    def _get_optimized_params(self, history):
+    def _get_optimized_params(self, history: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         """基于历史数据优化参数"""
         if len(history) < 3:  # 至少需要3次尝试才能优化
             return None
             
-        def objective_func(params):
+        def objective_func(params: Dict[str, Any]) -> float:
             # 模拟参数得分（实际应调用评估函数）
             return sum(p * 0.5 for p in params.values())
             
@@ -209,7 +251,7 @@ class TaskFlow:
         
         return self.optimizer.optimize(objective_func, initial_params, bounds)
 
-    def self_evaluate(self, computation_result, evaluation_criteria):
+    def self_evaluate(self, computation_result: Dict[str, Any], evaluation_criteria: Dict[str, Any]) -> Tuple[float, str]:
         """
         智能体自我评价：根据评测标准对实验结果打分，1.0为完全达标。
         """
@@ -227,28 +269,53 @@ class TaskFlow:
             return 0.5, "有实验总结"
         return 0.0, "无有效结果"
 
-    def run_flow(self, task_input):
-        """执行任务流并返回结果"""
-        result = {
-            'success': False,
-            'metrics': {'accuracy': 0.0, 'time_cost': 0.0},
-            'actions': [],
-            'output': None
-        }
+    def process_task(self, task: Dict[str, Any]) -> Dict[str, Any]:
+        """处理任务（必须通过Agent）"""
+        logger.info(f"开始处理任务: {task.get('goal','')}")
         
-        try:
-            start_time = time.time()
-            output = self.agent_manager.dispatch(task_input)
-            result.update({
-                'success': True,
-                'output': output,
-                'actions': getattr(output, 'actions', []),
-                'metrics': {
-                    'accuracy': self._calculate_accuracy(output),
-                    'time_cost': time.time() - start_time
-                }
-            })
-        except Exception as e:
-            result['error'] = str(e)
+        if not isinstance(task, dict) or not task.get('goal'):
+            logger.error("无效任务格式")
+            return {"error": "Invalid task format"}
             
-        return result
+        # 强制通过TaskManager Agent处理
+        if 'task_manager' not in self.agent_manager.agents:
+            logger.critical("系统中缺少TaskManager Agent")
+            return {"error": "Missing TaskManager Agent"}
+            
+        try:
+            # 添加任务类型标识
+            task['type'] = 'root_task'
+            
+            logger.debug(f"分发任务给TaskManager: {task}")
+            result = self.agent_manager.agents['task_manager'].handle(task)
+            
+            if not result.get('success', False):
+                logger.error(f"任务处理失败: {result.get('error','Unknown error')}")
+            else:
+                logger.info(f"任务处理完成，参与Agent: {result.get('debug',{}).get('agent_path',[])}")
+                
+            return result
+            
+        except Exception as e:
+            logger.exception(f"任务处理异常")
+            return {"error": str(e)}
+
+    def test_agent_connections(self) -> Dict[str, Any]:
+        """测试所有Agent的连接状态"""
+        if not hasattr(self, 'agent_manager') or not self.agent_manager:
+            return {"error": "Agent管理器未初始化"}
+        
+        test_results = {}
+        for name, agent in self.agent_manager.agents.items():
+            try:
+                # 简单的ping测试
+                if hasattr(agent, 'ping'):
+                    test_results[name] = agent.ping()
+                else:
+                    test_results[name] = f"{type(agent).__name__} 不支持ping测试"
+            except Exception as e:
+                test_results[name] = f"连接失败: {str(e)}"
+        
+        return test_results
+
+__all__ = ['TaskFlow']

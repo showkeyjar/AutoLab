@@ -3,15 +3,13 @@ import os
 import pandas as pd
 import json
 import uuid
-
-# 设置项目根目录
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
-sys.path.insert(0, project_root)
-
-# 现在可以安全导入本地模块
+from datetime import datetime
+from typing import Dict, Any
+from autolab.core.logger import get_logger
+logger = get_logger(__name__)
+from autolab.core.task_flow import TaskFlow
 from autolab.core.experiment_state import ExperimentState
 from autolab.core.experiment_templates import ExperimentTemplate
-from autolab.core.task_flow import TaskFlow
 from autolab.utils.llm_client import OllamaClient
 
 # 1. 当前脚本绝对路径
@@ -23,6 +21,25 @@ sys.path.insert(0, project_root)
 import streamlit as st
 import traceback
 import os
+import logging
+from pathlib import Path
+
+# 创建日志目录
+log_dir = Path("logs")
+log_dir.mkdir(exist_ok=True)
+
+# 配置日志
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(log_dir / "autolab.log"),
+        logging.StreamHandler()
+    ]
+)
+
+# 获取logger实例
+logger = logging.getLogger(__name__)
 
 state_manager = ExperimentState()
 
@@ -48,25 +65,33 @@ st.markdown("""
 
 with st.sidebar:
     st.header("⚙️ 系统配置")
+    
     # 初始化Ollama客户端
-    ollama_client = OllamaClient()
+    llm_client = OllamaClient()  # 使用默认配置初始化
     ollama_url = st.text_input(
         "Ollama API 地址", 
-        value=ollama_client.base_url, 
+        value=llm_client.base_url if hasattr(llm_client, 'base_url') else "http://localhost:11434",
         help="如 http://localhost:11434"
     )
     
     # 在配置区块修改模型选择逻辑
-    ollama_model = st.selectbox(
-        "默认LLM模型", 
-        options=ollama_client.available_models,
-        index=0,
-        help="如 llama3、qwen:14b 等"
-    )
+    if st.button("刷新模型列表"):
+        llm_client = OllamaClient(base_url=ollama_url)
+        st.rerun()  # 刷新界面
     
-    # 添加模型状态提示
-    if not ollama_client.available_models:
-        st.warning("未检测到可用模型，请确保Ollama服务已运行")
+    if llm_client.available_models:
+        ollama_model = st.selectbox(
+            "选择LLM模型",
+            options=llm_client.available_models,
+            index=0
+        )
+        if ollama_model != llm_client.model:
+            llm_client.model = ollama_model
+            st.success(f"已切换至模型: {ollama_model}")
+    else:
+        st.warning("未检测到可用模型，请确保:")
+        st.write("1. Ollama服务已运行")
+        st.write(f"2. 正确配置API地址: {ollama_url}")
         st.stop()  # 没有可用模型时停止执行
     
     # 指标配置部分
@@ -95,6 +120,41 @@ with st.sidebar:
                 "time_cost": {"enabled": time_enabled, "threshold": time_threshold}
             })
             st.success("指标配置已保存")
+
+def init_task_flow():
+    """初始化任务流"""
+    try:
+        logger.info("初始化任务流...")
+        task_flow = TaskFlow()
+        logger.info("任务流初始化完成")
+    except Exception as e:
+        logger.critical("任务流初始化失败", exc_info=True)
+        raise
+    
+    # 确保至少有一个task_manager
+    if not hasattr(task_flow.agent_manager, 'agents') or 'task_manager' not in task_flow.agent_manager.agents:
+        raise ValueError("系统中缺少task_manager Agent")
+    
+    return task_flow
+
+task_flow = init_task_flow()
+
+def log_agent_status():
+    """记录所有Agent状态到日志"""
+    for name, agent in task_flow.agent_manager.agents.items():
+        try:
+            status = {
+                'name': name,
+                'type': type(agent).__name__,
+                'connected': getattr(agent, '_connected', None),
+                'mock_mode': getattr(agent, 'mock_mode', None),
+                'last_error': getattr(agent, '_last_error', None)
+            }
+            logger.info(f"Agent状态: {status}")
+        except Exception as e:
+            logger.error(f"获取Agent状态失败: {name}", exc_info=True)
+
+log_agent_status()
 
 def show_template_guide():
     """显示模板引导界面"""
@@ -186,7 +246,7 @@ with col2:
 # 在实验运行前检查中断状态
 if stop_btn:  # 检查是否触发中断
     if 'OllamaClient' in globals():
-        ollama_client.stop()
+        llm_client.stop()
     st.warning("正在停止当前实验...")
     st.stop()
 
@@ -199,82 +259,33 @@ if 'experiment_id' not in st.session_state:
     if saved_state:
         st.session_state.update(saved_state)
 
-def run_taskflow(goal):
+def process_user_input(user_input: str) -> Dict[str, Any]:
+    """将用户输入转换为标准任务格式"""
+    return {
+        "goal": user_input,
+        "type": "root_task",
+        "constraints": ""
+    }
+
+def run_taskflow(task_input: Dict[str, Any], flow):
+    """运行任务流并处理结果"""
+    logger.info(f"收到任务输入: {task_input}")
+    
+    # 调试日志：打印所有注册的Agent
+    if hasattr(flow, 'agent_manager') and hasattr(flow.agent_manager, 'agents'):
+        logger.debug(f"当前注册Agent: {list(flow.agent_manager.agents.keys())}")
+    
     try:
-        task_flow = TaskFlow()  # 不传 agent_manager 参数
-        
-        # Initialize retry tracking
-        st.session_state.setdefault('attempts', 0)
-        st.session_state.setdefault('previous_actions', set())
-        st.session_state.setdefault('attempt_history', [])
-        st.session_state.setdefault('best_score', 0)
-        
-        while st.session_state.attempts < 10:
-            result = task_flow.run_flow({"goal": goal})
-            
-            # Check metrics against thresholds
-            if 'metrics' in result:
-                metrics_ok = True
-                for metric, config in st.session_state.metrics_config.items():
-                    if config.get('enabled', False) and metric in result['metrics']:
-                        if result['metrics'][metric] < config.get('threshold', 0):
-                            metrics_ok = False
-                            break
-            else:
-                metrics_ok = False
-            
-            if metrics_ok:
-                return result, None
-                
-            # Check for repeated actions
-            if 'previous_actions' not in st.session_state:
-                st.session_state.previous_actions = set()
-
-            current_actions = frozenset(a['action'] for a in result.get('actions', []))
-
-            # 只有当有实际动作时才检查重复
-            if current_actions and current_actions in st.session_state.previous_actions:
-                st.warning("⚠️ 检测到可能的重复动作序列")
-                cols = st.columns(3)
-                cols[0].write("上次动作序列:")
-                for a in st.session_state.previous_actions:
-                    cols[1].write(f"- {a}")
-                
-                cols[0].write("当前动作序列:")
-                for a in current_actions:
-                    cols[2].write(f"- {a}")
-                
-                if st.checkbox("仍然继续执行"):
-                    st.session_state.previous_actions.add(current_actions)
-                    return result, None
-                else:
-                    return None, "用户选择终止执行"
-            else:
-                st.session_state.previous_actions.add(current_actions)
-                return result, None
-            
-            st.session_state.attempts += 1
-            
-            # Update attempt history
-            attempt_history = st.session_state.attempt_history
-            attempt_history.append({
-                'attempt': st.session_state.attempts,
-                'score': result['metrics']['accuracy']
-            })
-            st.session_state.attempt_history = attempt_history
-            
-            # Update best score
-            if result['metrics']['accuracy'] > st.session_state.best_score:
-                st.session_state.best_score = result['metrics']['accuracy']
-            
-            # Check for manual stop
-            if st.session_state.get('manual_stop', False):
-                return None, "人工干预终止"
-            
-        return None, "超过最大尝试次数(10次)仍未达标"
-        
+        result = flow.run_flow(task_input)
+        if result.get('error'):
+            logger.error(f"任务执行错误: {result['error']}")
+            return None, result['error']
+        else:
+            logger.info(f"任务完成，结果长度: {len(str(result))}")
+            return result, None
     except Exception as e:
-        return None, traceback.format_exc()
+        logger.critical(f"系统异常: {str(e)}")
+        return None, str(e)
 
 def generate_diagnostic_report(result, metrics_config):
     """生成实验诊断报告"""
@@ -340,103 +351,431 @@ def show_diagnostic_report(report):
             for suggestion in report['suggestions']:
                 st.info(f"💡 {suggestion}")
 
-if run_btn and user_goal.strip():
-    try:
-        with st.spinner("智能体协作中，请稍候..."):
-            result, err = run_taskflow(user_goal.strip())
-            if stop_btn:  # 检查是否触发中断
-                raise RuntimeError("实验被用户中断")
-    except RuntimeError as e:
-        st.error(f"实验中断: {str(e)}")
-    else:
-        if err:
-            st.error("运行出错：\n" + err)
-        elif result:
-            st.success("实验流已完成！")
-            for key, val in result.items():
-                st.markdown(f"### {key} 智能体输出")
-                if isinstance(val, dict):
-                    # 结构化主信息
-                    for sk, sv in val.items():
-                        if sk.endswith("llm_raw") or sk == "llm_raw":
-                            continue
-                        st.write(f"**{sk}**:", sv)
-                    # 原始 LLM 响应单独用 code 展示，避免嵌套 expander
-                    if "llm_raw" in val:
-                        st.markdown("**原始 LLM 响应：**")
-                        st.code(val["llm_raw"], language="text")
-                else:
-                    st.write(val)
+def show_experiment_details():
+    """显示选中的实验详情"""
+    if 'experiment_id' in st.session_state or 'result' in st.session_state:
+        with st.expander("📝 实验详情", expanded=True):
+            st.write(f"**实验ID**: {st.session_state.get('experiment_id', '当前实验')}")
+            st.write(f"**实验目标**: {st.session_state.get('goal', '无')}")
+            st.write(f"**创建时间**: {st.session_state.get('timestamp', '未知')}")
             
-            # Add progress visualization
-            if st.session_state.get('attempts', 0) > 0:
-                st.subheader("实验进度")
+            if 'result' in st.session_state:
+                st.subheader("执行结果")
                 
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.metric("尝试次数", st.session_state['attempts'])
-                    st.progress(min(st.session_state['attempts'] / 10, 1.0))
+                if 'metrics' in st.session_state['result']:
+                    st.write("**指标结果**")
+                    for metric, value in st.session_state['result']['metrics'].items():
+                        st.metric(
+                            label=metric,
+                            value=f"{value:.2f}",
+                            delta=f"达标" if value >= st.session_state.metrics_config.get(metric, {}).get('threshold', 0) else "未达标"
+                        )
                 
-                with col2:
-                    if st.session_state.get('best_score'):
-                        st.metric("最佳得分", f"{st.session_state['best_score']:.2f}")
-                
-                # Show attempt history
-                if st.session_state.get('attempt_history'):
-                    history_df = pd.DataFrame(st.session_state['attempt_history'])
-                    st.line_chart(history_df.set_index('attempt')['score'])
+                if 'actions' in st.session_state['result']:
+                    st.write("**执行步骤**")
+                    for i, action in enumerate(st.session_state['result']['actions'], 1):
+                        st.write(f"{i}. {action.get('action', '未知动作')}")
+                        
+            if 'config' in st.session_state:
+                st.subheader("实验配置")
+                st.write(f"**使用模板**: {st.session_state['config'].get('template', '无')}")
+                st.write("**指标配置**")
+                st.json(st.session_state['config'].get('metrics', {}))
             
-            # 在结果展示部分添加优化信息
-            if result and 'optimized_params' in result:
-                st.subheader("参数优化结果")
-                st.json(result['optimized_params'])
-                
-                # 显示优化历史
-                history = task_flow.optimizer.history
-                if history:
-                    df = pd.DataFrame([{
-                        'attempt': i+1, 
-                        'score': score,
-                        **params
-                    } for i, (params, score) in enumerate(history)])
-                    
-                    st.line_chart(df.set_index('attempt')['score'])
-            
-            # 保存状态
-            state_manager.save_state(
-                st.session_state.experiment_id,
-                {
-                    'goal': user_goal,
-                    'result': result,
-                    'history': st.session_state.get('attempt_history', []),
-                    'config': {
-                        'ollama_model': ollama_model,
-                        'metrics_cfg': st.session_state.metrics_config
-                    }
-                }
-            )
+            # 添加导出按钮
+            export_experiment()
 
-            # 在结果显示部分
-            if 'metrics' in result:
-                st.subheader("📊 指标结果")
-                cols = st.columns(3)
-                for i, (metric, value) in enumerate(result['metrics'].items()):
-                    cols[i % 3].metric(
-                        label=metric,
-                        value=f"{value:.2f}",
-                        delta=f"达标" if value >= st.session_state.metrics_config.get(metric, {}).get('threshold', 0) else "未达标",
-                        delta_color="normal"
-                    )
+def export_experiment():
+    """导出实验数据"""
+    if 'experiment_id' not in st.session_state:
+        return
+    
+    experiment_data = {
+        'metadata': {
+            'id': st.session_state['experiment_id'],
+            'goal': st.session_state.get('goal', ''),
+            'timestamp': st.session_state.get('timestamp', '')
+        },
+        'result': st.session_state.get('result', {}),
+        'config': st.session_state.get('config', {})
+    }
+    
+    json_str = json.dumps(experiment_data, indent=2, ensure_ascii=False)
+    st.download_button(
+        label="📥 导出实验数据",
+        data=json_str,
+        file_name=f"experiment_{st.session_state['experiment_id']}.json",
+        mime="application/json"
+    )
+
+def show_agent_debug_info(result):
+    """显示Agent调试信息"""
+    if not isinstance(result, dict) or 'debug' not in result:
+        return
+        
+    with st.expander("🐞 Agent调试信息", expanded=False):
+        st.write("执行步骤追踪:")
+        for step in result['debug'].get('agent_steps', []):
+            st.write(f"{step['timestamp']} - {step['agent']}: {step['action']} ({step['status']})")
+            if step.get('details'):
+                st.json(step['details'])
+
+def process_task_result(result):
+    """处理任务结果确保格式统一"""
+    if not isinstance(result, dict):
+        return {
+            'output': result,
+            'history': [],
+            'success': True if result else False
+        }
+    
+    # 确保包含必要字段
+    for field in ['history', 'output', 'success']:
+        if field not in result:
+            result[field] = [] if field == 'history' else None if field == 'output' else False
+    
+    return result
+
+def show_agent_status(flow):
+    """增强版状态显示"""
+    if not hasattr(flow, 'agent_manager'):
+        st.sidebar.error("⚠️ Agent管理器未加载")
+        return
+        
+    status = flow.agent_manager.test_connections()
+    if all(s.startswith("🔴") for s in status.values()):
+        st.sidebar.error("⚠️ 所有Agent离线！")
+        if st.sidebar.button("强制重连"):
+            try:
+                with st.spinner("重新初始化中..."):
+                    flow.agent_manager.start_collaboration()
+                st.rerun()
+            except Exception as e:
+                st.error(f"重连失败: {str(e)}")
+    else:
+        # 正常显示状态...
+        pass
+
+show_agent_status(task_flow)
+
+def show_diagnostics(flow):
+    """显示系统诊断信息"""
+    with st.expander("🛠️ 系统诊断", expanded=True):
+        
+        # 基础环境检查
+        st.subheader("环境检查")
+        col1, col2 = st.columns(2)
+        
+        try:
+            import socket
+            hostname = socket.gethostname()
+            col1.metric("主机名", hostname)
+        except Exception as e:
+            col1.error(f"主机名获取失败: {str(e)}")
             
-            # 增强结果处理健壮性
-            if result.get('actions'):
-                st.subheader("执行动作")
-                for action in result['actions']:
-                    st.markdown(f"- {action['action']}")
+        try:
+            import psutil
+            cpu_percent = psutil.cpu_percent()
+            mem = psutil.virtual_memory()
+            col2.metric("CPU使用率", f"{cpu_percent}%")
+            col2.metric("内存使用", f"{mem.percent}%")
+        except ImportError:
+            col2.warning("psutil未安装，无法获取资源使用情况")
+        
+        # 网络连接检查
+        st.subheader("网络检查")
+        test_urls = [
+            ("Ollama服务", llm_client.base_url),
+            ("互联网", "https://www.baidu.com")
+        ]
+        
+        for name, url in test_urls:
+            try:
+                import requests
+                r = requests.get(url, timeout=3)
+                st.success(f"{name} ({url}) 连接正常 (HTTP {r.status_code})")
+            except Exception as e:
+                st.error(f"{name} ({url}) 连接失败: {str(e)}")
+        
+        # Agent详细状态
+        st.subheader("Agent状态详情")
+        for name, agent in flow.agent_manager.agents.items():
+            st.markdown(f"**{name}** (`{type(agent).__name__}`)")
             
-            # 生成诊断报告
-            diagnostic_report = generate_diagnostic_report(result, st.session_state.metrics_config)
-            show_diagnostic_report(diagnostic_report)
+            # 连接状态
+            if not hasattr(agent, '_connected'):
+                st.error("⚠️ 缺少连接状态属性")
+                continue
+                
+            cols = st.columns([1,3])
+            cols[0].write(f"连接状态: {'✅ 已连接' if agent._connected else '❌ 未连接'}")
+            
+            # 连接/重连按钮
+            if cols[0].button(f"测试连接 {name}", key=f"connect_{name}"):
+                try:
+                    result = agent.connect()
+                    if result:
+                        st.success(f"{name} 连接成功")
+                    else:
+                        st.error(f"{name} 连接返回False")
+                except Exception as e:
+                    st.exception(e)
+            
+            # 显示详细属性
+            attr_cols = st.columns([1,1,1])
+            with attr_cols[0]:
+                st.caption("模拟模式")
+                st.code(str(getattr(agent, 'mock_mode', None)))
+            with attr_cols[1]:
+                st.caption("就绪状态")
+                st.code(str(getattr(agent, 'is_ready', None)))
+            with attr_cols[2]:
+                st.caption("最后错误")
+                st.code(str(getattr(agent, '_last_error', None)) or "无")
+
+show_diagnostics(task_flow)
+
+if run_btn and user_goal.strip():
+    # 在任务执行前添加检查
+    if not hasattr(task_flow, 'agent_manager') or not task_flow.agent_manager.agents:
+        st.error("⚠️ Agent管理器未正确初始化！")
+        st.stop()
+    
+    # 检查在线Agent数量
+    online_agents = []
+    agent_status = {}
+
+    for name, agent in task_flow.agent_manager.agents.items():
+        try:
+            if not hasattr(agent, '_connected'):
+                status = "❌ 缺少连接状态"
+            elif agent._connected:
+                status = "✅ 已连接"
+                online_agents.append(name)
+            else:
+                status = "⚠️ 未连接"
+                
+            # 记录详细状态
+            agent_status[name] = {
+                'status': status,
+                'type': type(agent).__name__,
+                'mock_mode': getattr(agent, 'mock_mode', False)
+            }
+        except Exception as e:
+            agent_status[name] = {
+                'status': f"❌ 检查失败: {str(e)}",
+                'error': str(e)
+            }
+
+    # 显示详细状态
+    with st.expander("智能体详细状态"):
+        for name, info in agent_status.items():
+            st.write(f"{name} ({info.get('type','')}): {info['status']}")
+            if 'error' in info:
+                st.error(info['error'])
+            if info.get('mock_mode', False):
+                st.caption("⚠️ 当前处于模拟模式")
+
+    if not online_agents:
+        st.error("⚠️ 没有可用的在线Agent！")
+        if st.button("🔄 尝试重新连接所有Agent"):
+            for agent in task_flow.agent_manager.agents.values():
+                if hasattr(agent, 'connect'):
+                    agent.connect()
+            st.rerun()
+        
+    try:
+        # 确保task_flow和agent_manager已正确初始化
+        if not hasattr(task_flow, 'agent_manager'):
+            st.error("Agent管理器未初始化，请检查系统配置")
+            st.stop()
+            
+        # 更新测试连接部分
+        if not hasattr(task_flow, 'agent_manager'):
+            st.error("Agent管理器未初始化")
+            st.stop()
+            
+        # 使用TaskFlow的测试方法
+        test_result = task_flow.test_agent_connections()
+        if isinstance(test_result, dict) and 'error' in test_result:
+            st.error(test_result['error'])
+            st.stop()
+        elif not all(v is True for v in test_result.values() if isinstance(v, bool)):
+            st.error("部分Agent连接测试失败")
+            st.json(test_result)
+            st.stop()
+            
+        # 确保任务输入是字典
+        task_input = process_user_input(user_goal.strip())
+        with st.spinner("智能体协作中，请稍候..."):
+            result, error = run_taskflow(task_input, task_flow)
+            
+        if error:
+            st.error(f"执行失败: {error}")
+        else:
+            if not result.get('output'):
+                st.warning("任务已执行但无输出结果，请检查Agent配置")
+            else:
+                st.success("实验完成！")
+                
+            # 显示详细信息
+            show_agent_debug_info(result)
+            show_experiment_details()
+            
+            # 在任务执行后添加参与度检查
+            with st.expander("🔍 任务执行分析"):
+                st.subheader("Agent参与情况")
+                
+                # 获取任务处理路径
+                task_path = result.get('debug', {}).get('agent_path', [])
+                if not task_path:
+                    st.warning("⚠️ 没有记录到Agent参与路径")
+                    
+                    # 检查Agent调用情况
+                    st.write("各Agent最后活动时间:")
+                    for name, agent in task_flow.agent_manager.agents.items():
+                        last_active = getattr(agent, '_last_active', '从未调用')
+                        st.write(f"- {name}: {last_active}")
+                else:
+                    st.success(f"任务处理路径: {' → '.join(task_path)}")
+                    
+                # 显示原始debug信息
+                if 'debug' in result:
+                    st.json(result['debug'])
+    except Exception as e:
+        st.error(f"系统错误: {str(e)}")
 
 else:
     st.info("请在上方输入实验目标，然后点击“运行实验流”按钮。")
+
+# 在侧边栏添加调试面板
+with st.sidebar.expander("🛠️ Agent调试", expanded=False):
+    if hasattr(task_flow, 'agent_manager') and task_flow.agent_manager:
+        st.write(f"已注册Agent数量: {len(task_flow.agent_manager.agents)}")
+        
+        for name, agent in task_flow.agent_manager.agents.items():
+            st.write(f"- {name}: {type(agent).__name__}")
+            
+        if st.button("测试Agent连接"):
+            try:
+                test_result = task_flow.agent_manager.test_connections()
+                st.json(test_result)
+            except Exception as e:
+                st.error(f"测试失败: {str(e)}")
+    else:
+        st.warning("Agent管理器未初始化")
+
+def show_experiment_history():
+    """显示实验历史记录"""
+    with st.sidebar.expander("📚 实验历史", expanded=True):
+        saved_experiments = state_manager.list_states()
+        
+        if saved_experiments:
+            # 按时间倒序排序
+            sorted_experiments = sorted(
+                saved_experiments,
+                key=lambda x: state_manager.load_state(x).get('timestamp', ''),
+                reverse=True
+            )
+            
+            selected_exp = st.selectbox(
+                "选择实验记录",
+                options=sorted_experiments,
+                format_func=lambda x: f"{x} ({state_manager.load_state(x).get('timestamp', '未知时间')})",
+                key="selected_experiment"
+            )
+            
+            cols = st.columns(2)
+            if cols[0].button("🔍 查看详情", key="view_experiment"):
+                state = state_manager.load_state(selected_exp)
+                st.session_state.update(state)
+                st.rerun()
+                
+            if cols[1].button("🗑️ 删除记录", key="delete_experiment"):
+                state_manager.delete_state(selected_exp)
+                st.success(f"已删除实验记录: {selected_exp}")
+                st.rerun()
+        else:
+            st.info("暂无历史实验记录")
+
+show_experiment_history()
+
+def show_execution_logs():
+    """显示执行日志"""
+    with st.sidebar.expander("📜 执行日志", expanded=False):
+        if 'execution_logs' in st.session_state and st.session_state.execution_logs:
+            for log in reversed(st.session_state.execution_logs):
+                with st.expander(f"{log['timestamp']} - {log['action']}", expanded=False):
+                    st.json(log['details'])
+            
+            if st.button("🔄 刷新日志"):
+                st.rerun()
+            
+            if st.button("🧹 清除日志"):
+                st.session_state.execution_logs = []
+                st.rerun()
+        else:
+            st.info("暂无执行日志")
+
+show_execution_logs()
+
+# 自动修复选项
+with st.sidebar.expander("🛠️ 故障修复"):
+    if st.button("🔄 强制进入模拟模式"):
+        for name, agent in task_flow.agent_manager.agents.items():
+            try:
+                if hasattr(agent, 'mock_mode'):
+                    agent.mock_mode = True
+                    agent.connect()
+                    st.success(f"{name} 已进入模拟模式")
+                else:
+                    st.warning(f"{name} 不支持模拟模式")
+            except Exception as e:
+                st.error(f"{name} 设置失败: {str(e)}")
+        st.rerun()
+    
+    if st.button("📋 导出诊断报告"):
+        import json
+        from datetime import datetime
+        
+        report = {
+            "timestamp": datetime.now().isoformat(),
+            "agents": {},
+            "environment": {}
+        }
+        
+        # 收集Agent信息
+        for name, agent in task_flow.agent_manager.agents.items():
+            try:
+                report["agents"][name] = {
+                    "type": type(agent).__name__,
+                    "connected": getattr(agent, '_connected', None),
+                    "mock_mode": getattr(agent, 'mock_mode', None),
+                    "last_error": str(getattr(agent, '_last_error', None))
+                }
+            except Exception as e:
+                report["agents"][name] = {"error": str(e)}
+        
+        # 收集环境信息
+        try:
+            import platform, socket
+            report["environment"] = {
+                "system": platform.system(),
+                "hostname": socket.gethostname(),
+                "python_version": platform.python_version()
+            }
+        except Exception as e:
+            report["environment"] = {"error": str(e)}
+        
+        # 保存报告
+        report_path = log_dir / f"diagnostic_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        with open(report_path, 'w') as f:
+            json.dump(report, f, indent=2)
+        
+        st.success(f"诊断报告已保存到: {report_path}")
+        st.download_button(
+            "⬇️ 下载报告",
+            data=json.dumps(report, indent=2),
+            file_name=report_path.name,
+            mime="application/json"
+        )

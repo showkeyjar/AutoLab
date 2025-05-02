@@ -68,3 +68,5 @@ ollama.db
 # Misc
 *.orig
 *.lock
+
+.experiment_states/
