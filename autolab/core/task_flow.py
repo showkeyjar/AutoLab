@@ -2,6 +2,8 @@ from autolab.core.agent_manager import AgentManager
 from autolab.core.param_optimizer import ParamOptimizer
 import uuid
 import time
+import os
+import yaml
 
 class TaskFlow:
     """
@@ -11,6 +13,19 @@ class TaskFlow:
         self.agent_manager = AgentManager()
         self.optimizer = ParamOptimizer()
 
+    def auto_save_state(func):
+        """自动保存实验状态的装饰器"""
+        def wrapper(self, *args, **kwargs):
+            result = func(self, *args, **kwargs)
+            if hasattr(self, 'experiment_id') and hasattr(self, '_last_state'):
+                state_manager.save_state(
+                    self.experiment_id,
+                    self._last_state
+                )
+            return result
+        return wrapper
+
+    @auto_save_state
     def run_flow(self, user_task: dict):
         experiment_id = user_task.get("experiment_id") or str(uuid.uuid4())
         user_task["experiment_id"] = experiment_id
@@ -94,23 +109,36 @@ class TaskFlow:
             "logs": logs
         }
         
-    def _calculate_score(self, metrics):
-        """Enhanced scoring with weighted metrics and penalties"""
-        weights = {
-            'accuracy': 0.5,
-            'efficiency': 0.3,
-            'reproducibility': 0.2
+        self._last_state = {
+            'current_task': user_task,
+            'attempts': self.attempt_history
         }
         
-        # Calculate weighted score
-        score = sum(metrics.get(k, 0) * v for k,v in weights.items())
+    def _calculate_score(self, metrics):
+        """基于配置的评价标准计算分数"""
+        config = self._load_evaluation_config()
         
-        # Apply penalty for repeated parameters
-        if metrics.get('parameter_reuse', 0) > 0:
-            score *= max(0, 1 - 0.1 * metrics['parameter_reuse'])
-            
-        return round(score, 2)
+        # 计算基础分
+        base_score = sum(
+            metrics.get(name, 0) * config['metrics'][name]['weight']
+            for name in config['metrics']
+        )
         
+        # 应用惩罚项
+        for penalty in config['scoring']['penalty']:
+            base_score += config['scoring']['penalty'][penalty]
+        
+        return base_score
+
+    def _load_evaluation_config(self):
+        """加载评价配置"""
+        config_path = os.path.join(
+            os.path.dirname(__file__), 
+            "..", "..", "config", "evaluation_config.yaml"
+        )
+        with open(config_path, 'r') as f:
+            return yaml.safe_load(f)
+
     def _meets_thresholds(self, metrics, thresholds):
         if not thresholds:
             return False

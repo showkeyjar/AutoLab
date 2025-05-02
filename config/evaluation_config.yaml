@@ -1,0 +1,28 @@
+# 实验评价标准配置
+metrics:
+  accuracy:
+    weight: 0.5
+    threshold: 0.85
+    description: "预测准确率"
+  
+  efficiency:
+    weight: 0.3
+    threshold: 0.8
+    description: "计算效率"
+    
+  reproducibility:
+    weight: 0.2
+    threshold: 0.9
+    description: "结果可复现性"
+
+scoring:
+  passing_score: 0.8  # 达标分数
+  penalty:
+    repeated_params: -0.1  # 参数重复惩罚
+    timeout: -0.2  # 超时惩罚
+
+evaluation_methods:
+  - name: "auto"
+    description: "自动评分"
+  - name: "manual"
+    description: "人工评审"

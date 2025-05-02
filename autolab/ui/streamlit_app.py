@@ -2,6 +2,8 @@ import sys
 import os
 import pandas as pd
 import json
+from autolab.core.experiment_state import ExperimentState
+import uuid
 
 # 1. 当前脚本绝对路径
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -16,6 +18,8 @@ from autolab.utils.llm_client import ollama_client
 import traceback
 import os
 
+state_manager = ExperimentState()
+
 st.set_page_config(page_title="AutoLab 智能体实验系统", layout="wide")
 st.title("🧪 AutoLab 智能体实验系统")
 st.markdown("""
@@ -28,9 +32,19 @@ with st.sidebar:
     ollama_url = st.text_input(
         "Ollama API 地址", value=ollama_client.base_url, help="如 http://localhost:11434/api/generate"
     )
-    ollama_model = st.text_input(
-        "默认LLM模型", value=ollama_client.default_model, help="如 llama3、qwen:14b 等"
+    
+    # 在配置区块修改模型选择逻辑
+    ollama_model = st.selectbox(
+        "默认LLM模型", 
+        options=ollama_client.available_models,
+        index=0,
+        help="如 llama3、qwen:14b 等"
     )
+    
+    # 添加模型状态提示
+    if not ollama_client.available_models:
+        st.warning("未检测到可用模型，请确保Ollama服务已运行")
+        st.stop()  # 没有可用模型时停止执行
     
     # New metrics configuration
     st.header("📊 实验指标配置")
@@ -91,6 +105,14 @@ with st.sidebar:
     st.header("📈 实时监控")
     monitor_placeholder = st.empty()
 
+    saved_experiments = state_manager.list_states()
+    if saved_experiments:
+        selected_exp = st.selectbox("恢复实验", options=saved_experiments)
+        if st.button("加载"):
+            state = state_manager.load_state(selected_exp)
+            st.session_state.update(state)
+            st.rerun()
+
 def_goal = "提升气象大模型的预测准确率"
 user_goal = st.text_input("实验目标", def_goal, key="goal_input")
 run_btn = st.button("运行实验流")
@@ -101,6 +123,13 @@ if st.button("❌ 终止实验"):
     st.warning("终止信号已发送，当前实验完成后将停止")
 
 os.environ["PYTHONPATH"] = os.getcwd()
+
+if 'experiment_id' not in st.session_state:
+    st.session_state.experiment_id = str(uuid.uuid4())
+    # 尝试加载已有状态
+    saved_state = state_manager.load_state(st.session_state.experiment_id)
+    if saved_state:
+        st.session_state.update(saved_state)
 
 def run_taskflow(goal):
     try:
@@ -217,5 +246,23 @@ if run_btn and user_goal.strip():
                 } for i, (params, score) in enumerate(history)])
                 
                 st.line_chart(df.set_index('attempt')['score'])
+        
+        # 保存状态
+        state_manager.save_state(
+            st.session_state.experiment_id,
+            {
+                'goal': user_goal,
+                'result': result,
+                'history': st.session_state.get('attempt_history', []),
+                'config': {
+                    'ollama_model': ollama_model,
+                    'metrics_cfg': {
+                        "accuracy_threshold": accuracy_threshold,
+                        "efficiency_threshold": efficiency_threshold
+                    }
+                }
+            }
+        )
+
 else:
     st.info("请在上方输入实验目标，然后点击“运行实验流”按钮。")
