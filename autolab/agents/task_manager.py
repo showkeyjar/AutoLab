@@ -16,10 +16,11 @@ VALID_AGENTS = {
 class TaskManagerAgent(BaseAgent):
     """管理实验任务流程"""
     
-    def __init__(self, mock_mode: bool = False):
+    def __init__(self, mock_mode: bool = False, agent_manager=None):
         super().__init__(name="TaskManager", mock_mode=mock_mode)
         self._workflows = {}
         self._connected = False
+        self.agent_manager = agent_manager
     
     def connect(self) -> bool:
         """连接到任务管理服务"""
@@ -65,16 +66,23 @@ class TaskManagerAgent(BaseAgent):
                 'completeness': 0.95  # 默认完整度
             }
             
+            if not hasattr(self, 'agent_manager') or not self.agent_manager:
+                return {
+                    "success": False,
+                    "error": "Agent管理器未初始化",
+                    "debug": debug_info
+                }
+                
             for agent_name in agent_sequence:
                 if agent_name not in VALID_AGENTS:
                     logger.warning(f"跳过未注册的Agent: {agent_name}")
                     continue
                     
-                agent = self.agent_manager.get_agent(agent_name)
-                if not agent:
-                    continue
-                    
                 try:
+                    agent = self.agent_manager.get_agent(agent_name)
+                    if not agent:
+                        continue
+                        
                     result = agent.handle({
                         "goal": task['goal'],
                         "type": agent_name

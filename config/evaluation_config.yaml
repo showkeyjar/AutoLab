@@ -1,10 +1,11 @@
 # 实验评价标准配置
 metrics:
+  # 传统定义方式 (保留向后兼容)
   accuracy:
     weight: 0.5
     threshold: 0.85
     description: "预测准确率"
-  
+    
   efficiency:
     weight: 0.3
     threshold: 0.8
@@ -14,6 +15,21 @@ metrics:
     weight: 0.2
     threshold: 0.9
     description: "结果可复现性"
+
+# 新增自然语言基准描述
+benchmark:
+  # 用户可以用自然语言描述期望的基准或对比目标
+  description: |
+    """
+    请用自然语言描述你期望的实验基准或对比目标。
+    例如:
+    - 我希望结果比GPT-4准确率高10%
+    - 响应时间应控制在2秒内
+    - 需要保持90%以上的结果一致性
+    """
+  
+  # Agent将根据描述自动分析适用的指标
+  auto_metrics: true
 
 scoring:
   passing_score: 0.8  # 达标分数

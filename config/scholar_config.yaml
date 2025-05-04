@@ -1,13 +1,21 @@
-# Semantic Scholar API配置
-api_key: "your_api_key_here"
-search_limit: 5
+# arXiv API配置
+search_limit: 10  # 每次查询最大结果数
 
 # 本地缓存设置
 cache_dir: "./data/papers"
 cache_ttl: 86400  # 24小时
 
+# 查询参数
+query_fields:
+  - "ti"  # 标题
+  - "abs"  # 摘要
+  - "cat"  # 类别
+  - "au"  # 作者
+
+# 默认排序
+sort_by: "submittedDate"
+sort_order: "descending"
+
 # 文献来源优先级
 sources:
-  - "semantic_scholar"
-  - "pubmed"
-  - "cnki"
+  - "arxiv"

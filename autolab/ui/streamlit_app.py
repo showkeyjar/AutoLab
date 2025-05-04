@@ -63,32 +63,87 @@ st.markdown("""
 - 支持分步查看每个智能体的结构化输出与原始 LLM 响应。
 """)
 
+# 实验配置区域
+expander = st.expander("🧪 实验核心配置", expanded=True)
+with expander:
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        # 实验目标
+        goal = st.text_area(
+            "实验目标",
+            key="goal",
+            help="请描述实验的主要目标和预期成果"
+        )
+        
+    with col2:
+        # 实验基准
+        benchmark = st.text_area(
+            "实验基准描述",
+            key="benchmark",
+            help="请描述评估实验结果的基准标准"
+        )
+    
+    # 自定义指标
+    with st.container():
+        st.subheader("📊 自定义指标")
+        custom_metrics = st.text_area(
+            "自定义评估指标 (每行一个)",
+            key="custom_metrics",
+            height=100,
+            help="输入额外的评估指标，每行一个"
+        )
+
+# 执行控制区域
+with st.container():
+    st.subheader("🚀 执行控制")
+    col_run, col_stop = st.columns([1,1])
+    
+    with col_run:
+        if st.button("▶️ 开始实验", type="primary"):
+            # 实验执行逻辑
+            pass
+            
+    with col_stop:
+        if st.button("⏹️ 停止实验"):
+            # 停止逻辑
+            pass
+
+# 系统配置 - 放在侧边栏
 with st.sidebar:
     st.header("⚙️ 系统配置")
     
     # 初始化Ollama客户端
-    llm_client = OllamaClient()  # 使用默认配置初始化
     ollama_url = st.text_input(
         "Ollama API 地址", 
-        value=llm_client.base_url if hasattr(llm_client, 'base_url') else "http://localhost:11434",
+        value="http://localhost:11434",
         help="如 http://localhost:11434"
     )
     
-    # 在配置区块修改模型选择逻辑
-    if st.button("刷新模型列表"):
-        llm_client = OllamaClient(base_url=ollama_url)
-        st.rerun()  # 刷新界面
+    # 测试连接
+    if st.button("测试连接"):
+        try:
+            from autolab.utils.llm_client import OllamaClient
+            llm_client = OllamaClient(base_url=ollama_url)
+            if llm_client.available_models:
+                st.success(f"连接成功! 可用模型: {', '.join(llm_client.available_models)}")
+            else:
+                st.warning("连接成功但未检测到模型")
+        except Exception as e:
+            st.error(f"连接失败: {str(e)}")
+            
+    if not hasattr(st.session_state, 'llm_client') or st.button("重新连接"):
+        try:
+            from autolab.utils.llm_client import OllamaClient
+            st.session_state.llm_client = OllamaClient(base_url=ollama_url)
+            st.success("LLM客户端已初始化")
+        except Exception as e:
+            st.error(f"LLM客户端初始化失败: {str(e)}")
+            st.stop()
     
-    if llm_client.available_models:
-        ollama_model = st.selectbox(
-            "选择LLM模型",
-            options=llm_client.available_models,
-            index=0
-        )
-        if ollama_model != llm_client.model:
-            llm_client.model = ollama_model
-            st.success(f"已切换至模型: {ollama_model}")
-    else:
+    llm_client = st.session_state.get('llm_client')
+    
+    if not llm_client or not llm_client.available_models:
         st.warning("未检测到可用模型，请确保:")
         st.write("1. Ollama服务已运行")
         st.write(f"2. 正确配置API地址: {ollama_url}")
@@ -96,28 +151,25 @@ with st.sidebar:
     
     # 指标配置部分
     with st.expander("⚙️ 实验指标配置", expanded=False):
-        # 主指标配置
-        st.subheader("核心指标")
-        cols = st.columns(2)
-        with cols[0]:
-            acc_enabled = st.checkbox("启用准确率", st.session_state.metrics_config["accuracy"]["enabled"])
-            acc_threshold = st.number_input("准确率阈值", min_value=0.0, max_value=1.0, 
-                                          value=st.session_state.metrics_config["accuracy"]["threshold"], step=0.05)
-        with cols[1]:
-            time_enabled = st.checkbox("启用耗时统计", st.session_state.metrics_config["time_cost"]["enabled"])
-            time_threshold = st.number_input("最大耗时(秒)", min_value=0.0, 
-                                           value=st.session_state.metrics_config["time_cost"]["threshold"])
+        # 自然语言基准输入
+        benchmark = st.text_area(
+            "实验基准描述",
+            help="用自然语言描述你期望的实验基准或对比目标\n例如:\n- 我希望结果比GPT-4准确率高10%\n- 响应时间应控制在2秒内\n- 需要保持90%以上的结果一致性"
+        )
         
-        # 自定义指标
+        # 保留自定义指标用于特殊情况
         st.subheader("自定义指标")
         for i, custom in enumerate(st.session_state.metrics_config["custom"]):
-            with st.expander(f"指标 {i+1}: {custom['name']}", expanded=False):
-                st.text_area(f"计算公式", value=custom.get("formula", ""), key=f"custom_formula_{i}")
-        
-        if st.button("保存配置"):
+            st.text_input(f"指标名称 {i+1}", value=custom["name"])
+            st.number_input(f"权重 {i+1}", min_value=0.0, max_value=1.0, value=custom["weight"], step=0.1)
+            
+        if st.button("➕ 添加自定义指标"):
+            st.session_state.metrics_config["custom"].append({"name": "", "weight": 0.1})
+            st.rerun()
+            
+        if st.button("💾 保存配置"):
             st.session_state.metrics_config.update({
-                "accuracy": {"enabled": acc_enabled, "threshold": acc_threshold},
-                "time_cost": {"enabled": time_enabled, "threshold": time_threshold}
+                "custom": st.session_state.metrics_config["custom"]
             })
             st.success("指标配置已保存")
 

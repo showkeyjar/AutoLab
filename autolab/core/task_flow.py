@@ -63,8 +63,12 @@ class TaskFlow:
                     {"user_task": user_task, "literature": literature_result})
                 robot_result = self.agent_manager.dispatch("robot_operator",
                     {"design": design_result})
-                analysis_result = self.agent_manager.dispatch("data_analyst",
-                    {"experiment_data": robot_result})
+                
+                # Use experiment_designer for analysis if needed
+                analysis_result = design_result  # Default to design result
+                if "analysis" not in design_result:
+                    analysis_result = self.agent_manager.dispatch("experiment_designer",
+                        {"experiment_data": robot_result})
                 
                 # 2. Evaluate results
                 current_score = self._calculate_score(analysis_result)
@@ -73,7 +77,7 @@ class TaskFlow:
                     best_score = current_score
                 
                 # 3. Check against thresholds
-                if self._meets_thresholds(analysis_result["metrics"], user_task.get("thresholds")):
+                if self._meets_thresholds(analysis_result.get("metrics", {}), user_task.get("thresholds")):
                     return {
                         "status": "success",
                         "result": analysis_result,

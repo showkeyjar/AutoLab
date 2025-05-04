@@ -16,13 +16,23 @@ class AgentManager:
     """
     def __init__(self, mock_mode=False):
         """只初始化核心Agent"""
-        self.agents: Dict[str, Any] = {
-            "task_manager": TaskManagerAgent(mock_mode=mock_mode),
+        # 先创建AgentManager实例
+        self.agents: Dict[str, Any] = {}
+        
+        # 创建TaskManagerAgent时需要传入当前AgentManager实例
+        self.agents["task_manager"] = TaskManagerAgent(
+            mock_mode=mock_mode, 
+            agent_manager=self
+        )
+        
+        # 其他Agent初始化
+        self.agents.update({
             "literature_reader": LiteratureReaderAgent(mock_mode=mock_mode),
             "experiment_designer": ExperimentDesignerAgent(mock_mode=mock_mode),
             "robot_operator": RobotOperatorAgent(mock_mode=mock_mode),
             "computation_executor": ComputationExecutorAgent(mock_mode=mock_mode)
-        }
+        })
+        
         logger.info(f"核心Agent初始化完成: {list(self.agents.keys())}")
         
         # 记录每个Agent的初始化状态
