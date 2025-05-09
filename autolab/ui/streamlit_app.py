@@ -11,6 +11,7 @@ from autolab.core.task_flow import TaskFlow
 from autolab.core.experiment_state import ExperimentState
 from autolab.core.experiment_templates import ExperimentTemplate
 from autolab.utils.llm_client import OllamaClient
+from autolab.ui.goal_display import show_structured_goal, export_structured_goal, edit_structured_goal
 
 # 1. 当前脚本绝对路径
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -53,6 +54,16 @@ def init_session_state():
         }
     if 'templates_init' not in st.session_state:
         st.session_state.templates_init = False
+    
+    # 结构化目标相关状态
+    if 'parsed_goal' not in st.session_state:
+        st.session_state.parsed_goal = None
+    if 'show_edit_goal' not in st.session_state:
+        st.session_state.show_edit_goal = False
+        
+    # 初始化日志
+    if 'execution_logs' not in st.session_state:
+        st.session_state.execution_logs = []
 
 init_session_state()
 
@@ -289,27 +300,60 @@ if 'experiment_id' not in st.session_state:
 os.environ["PYTHONPATH"] = os.getcwd()
 
 def process_user_input(user_input: str) -> Dict[str, Any]:
-    """将用户输入转换为标准任务格式"""
-    # 获取自定义指标
-    custom_metrics = []
-    if st.session_state.get('custom_metrics'):
-        # 分行解析自定义指标
-        for line in st.session_state.custom_metrics.strip().split('\n'):
-            if line.strip():
-                custom_metrics.append(line.strip())
+    """使用目标解析器将用户输入转换为结构化实验目标格式"""
+    if not user_input.strip():
+        return {}
+        
+    # 默认使用UUID作为实验的唯一标识
+    experiment_id = st.session_state.get('experiment_id', str(uuid.uuid4()))
     
-    # 合并配置和目标            
-    return {
-        "goal": user_input,
-        "type": "experiment",
-        "experiment_id": st.session_state.experiment_id,
-        "timestamp": datetime.now().isoformat(),
-        "benchmark": st.session_state.get('benchmark', ''),
-        "metrics": {
-            "custom": custom_metrics,
-            **st.session_state.metrics_config
+    # 使用目标解析器解析用户输入
+    parse_result = task_flow.parse_experimental_goal(user_input)
+    
+    if parse_result.get("status") == "success":
+        # 使用结构化的实验目标
+        parsed_goal = parse_result.get("parsed_goal", {})
+        
+        # 构建增强的任务对象
+        task = {
+            "goal": parsed_goal.get("goal", user_input),
+            "experiment_id": experiment_id,
+            "timestamp": datetime.now().isoformat(),
+            "benchmark": st.session_state.get('benchmark', ""),
+            "structured_goal": parsed_goal  # 保存完整的结构化目标
         }
-    }
+        
+        # 如果解析结果包含任务类型，添加到任务中
+        if "task_type" in parsed_goal:
+            task["task_type"] = parsed_goal["task_type"]
+            
+        # 如果解析结果包含成功标准，添加到任务中
+        if "success_criteria" in parsed_goal:
+            task["success_criteria"] = parsed_goal["success_criteria"]
+            
+        # 如果解析结果包含资源限制，添加到任务中
+        if "resources" in parsed_goal:
+            task["resources"] = parsed_goal["resources"]
+        
+        # 显示解析结果
+        st.session_state["parsed_goal"] = parsed_goal
+    else:
+        # 解析失败，使用原始方式
+        logger.warning(f"目标解析失败: {parse_result.get('error', '未知错误')}，使用原始格式")
+        task = {
+            "goal": user_input,
+            "experiment_id": experiment_id,
+            "timestamp": datetime.now().isoformat(),
+            "benchmark": st.session_state.get('benchmark', "")
+        }
+    
+    # 添加自定义指标
+    custom_metrics_text = st.session_state.get('custom_metrics', "")
+    if custom_metrics_text.strip():
+        custom_metrics = [m.strip() for m in custom_metrics_text.split("\n") if m.strip()]
+        task["custom_metrics"] = custom_metrics
+        
+    return task
 
 def run_taskflow(task_input: Dict[str, Any], flow):
     """运行任务流并处理结果"""
@@ -484,6 +528,27 @@ if st.session_state.get('start_experiment', False) and st.session_state.get('goa
                 else:
                     st.success("实验完成！")
                 
+                # 显示结构化实验目标
+                if "structured_goal" in task_input:
+                    st.subheader("🌀 解析后的结构化目标")
+                    st.info("以下是系统解析后的结构化实验目标，展示了AI如何理解您的实验需求。")
+                    
+                    with st.container():
+                        show_structured_goal(task_input["structured_goal"])
+                        
+                        # 如果实验带有增强的设计，显示增强前后对比
+                        if result.get("debug", {}).get("enhanced_design", {}).get("enhancement_status") == "success":
+                            st.subheader("🛠️ 方案增强结果")
+                            enhancements = result.get("debug", {}).get("enhanced_design", {}).get("enhancement_details", [])
+                            if enhancements:
+                                for enhancement in enhancements:
+                                    st.markdown(f"- {enhancement}")
+                            else:
+                                st.info("方案未进行明显改进或增强细节丢失")
+                        
+                        # 导出选项
+                        export_structured_goal(task_input["structured_goal"])
+                
                 # 显示详细信息
                 show_agent_debug_info(result)
                 show_experiment_details(result)
@@ -516,7 +581,45 @@ if st.session_state.get('start_experiment', False) and st.session_state.get('goa
             st.error(f"系统错误: {str(e)}")
             st.exception(e)
 else:
-    st.info("请在上方输入实验目标，然后点击"开始实验"按钮。")
+    st.info("请在上方输入实验目标，然后点击\"开始实验\"按钮。")
+    
+    # 显示结构化目标的演示
+    if "parsed_goal" in st.session_state:
+        st.subheader("🌀 目标解析器示例")
+        st.info("目标解析器可以理解你的实验需求，自动提取关键信息，帮助系统更好地执行实验。")
+        
+        # 显示示例解析结果
+        demo_goal = {
+            "goal": "对猪肝存储蛋白进行活性测定",
+            "task_type": "measurement",
+            "domain": "生物化学",
+            "confidence": 0.85,
+            "success_criteria": {
+                "primary_metric": {"name": "accuracy", "target_value": 0.95, "unit": "%"},
+                "secondary_metrics": [{"name": "time_cost", "target_value": 30, "unit": "min"}]
+            },
+            "resources": {
+                "required_instruments": ["分光光度计", "离心机", "水浴锅"],
+                "time_limit": 3600,
+            }
+        }
+        
+        with st.container():
+            show_structured_goal(demo_goal)
+            export_structured_goal(st.session_state.get("parsed_goal", {}))
+        
+        # 提供编辑按钮
+        if st.button("⚙️ 自定义实验设置"):
+            st.session_state["show_edit_goal"] = True
+            
+    # 显示编辑面板
+    if st.session_state.get("show_edit_goal", False):
+        edited_goal = edit_structured_goal(st.session_state.get("parsed_goal", {}))
+        if edited_goal:
+            st.session_state["parsed_goal"] = edited_goal
+            st.success("结构化目标已更新")
+            st.session_state["show_edit_goal"] = False
+            st.rerun()
 
 # 定义函数才能使用
 def show_agent_status(flow):
@@ -736,19 +839,13 @@ def show_experiment_history():
 show_experiment_history()
 
 def show_execution_logs():
-    """显示执行日志"""
+    """在侧边栏显示执行日志"""
     with st.sidebar.expander("📜 执行日志", expanded=False):
         if 'execution_logs' in st.session_state and st.session_state.execution_logs:
             for log in reversed(st.session_state.execution_logs):
-                with st.expander(f"{log['timestamp']} - {log['action']}", expanded=False):
-                    st.json(log['details'])
-            
-            if st.button("🔄 刷新日志"):
-                st.rerun()
-            
-            if st.button("🧹 清除日志"):
-                st.session_state.execution_logs = []
-                st.rerun()
+                st.markdown(f"**{log['timestamp']} - {log['action']}**")
+                st.json(log['details'])
+                st.markdown('---')
         else:
             st.info("暂无执行日志")
 

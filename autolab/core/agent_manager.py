@@ -3,6 +3,7 @@ from autolab.agents.literature_reader import LiteratureReaderAgent
 from autolab.agents.experiment_designer import ExperimentDesignerAgent
 from autolab.agents.robot_operator import RobotOperatorAgent
 from autolab.agents.computation_executor import ComputationExecutorAgent
+from autolab.agents.task_enhancer import TaskEnhancerAgent
 from autolab.core.logger import get_logger
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, Any
@@ -30,7 +31,8 @@ class AgentManager:
             "literature_reader": LiteratureReaderAgent(mock_mode=mock_mode),
             "experiment_designer": ExperimentDesignerAgent(mock_mode=mock_mode),
             "robot_operator": RobotOperatorAgent(mock_mode=mock_mode),
-            "computation_executor": ComputationExecutorAgent(mock_mode=mock_mode)
+            "computation_executor": ComputationExecutorAgent(mock_mode=mock_mode),
+            "task_enhancer": TaskEnhancerAgent(mock_mode=mock_mode)
         })
         
         logger.info(f"核心Agent初始化完成: {list(self.agents.keys())}")

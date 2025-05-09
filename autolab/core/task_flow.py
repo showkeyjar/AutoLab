@@ -1,5 +1,6 @@
 from autolab.core.agent_manager import AgentManager
 from autolab.core.param_optimizer import ParamOptimizer
+from autolab.core.goal_parser import ExperimentGoalParser
 import uuid
 import time
 import os
@@ -19,6 +20,17 @@ class TaskFlow:
         self.agent_manager = AgentManager()
         self.optimizer = ParamOptimizer()
         self._should_stop = False
+        
+        # 初始化实验目标解析器
+        try:
+            from autolab.utils.llm_client import OllamaClient
+            llm_client = OllamaClient()
+            self.goal_parser = ExperimentGoalParser(llm_client=llm_client)
+            logger.info("实验目标解析器初始化完成(使用LLM增强)")
+        except Exception as e:
+            logger.warning(f"初始化LLM客户端失败: {str(e)}，将使用基础目标解析器")
+            self.goal_parser = ExperimentGoalParser()  # 使用无LLM的基础解析器
+            
         logger.info("任务流初始化完成")
         
     def auto_save_state(func):
@@ -36,9 +48,155 @@ class TaskFlow:
     def stop(self):
         """标记需要停止"""
         self._should_stop = True
+        
+    def parse_experimental_goal(self, user_input: str, interactive: bool = False) -> Dict[str, Any]:
+        """
+        解析用户输入的实验目标，转换为结构化目标定义
+        
+        参数:
+            user_input: 用户自然语言输入
+            interactive: 是否开启交互式解析（遇到模糊点询问用户）
+            
+        返回:
+            结构化的实验目标定义
+        """
+        logger.info(f"开始解析实验目标: {user_input}")
+        
+        if not hasattr(self, 'goal_parser') or self.goal_parser is None:
+            logger.warning("目标解析器未初始化，创建一个基础解析器")
+            self.goal_parser = ExperimentGoalParser()
+            
+        # 使用解析器进行解析
+        if interactive:
+            # 交互式解析，需要提供回调函数
+            result = self.goal_parser.interactive_parse(user_input, self._interactive_callback)
+        else:
+            result = self.goal_parser.parse(user_input)
+        
+        # 处理解析结果
+        if result.get("status") in ["success", "enhanced", "partial"]:
+            parsed_goal = result.get("parsed_goal", {})
+            
+            # 添加元数据
+            parsed_goal["parsed_timestamp"] = time.time()
+            parsed_goal["confidence"] = result.get("confidence", 0.0)
+            parsed_goal["raw_input"] = user_input
+            
+            # 记录解析日志
+            logger.info(f"目标解析完成 (罪比度: {parsed_goal['confidence']})")
+            for key, value in parsed_goal.items():
+                if key not in ['raw_input', 'description']:
+                    logger.debug(f"  - {key}: {value}")
+                    
+            return {
+                "status": "success",
+                "parsed_goal": parsed_goal
+            }
+        else:
+            # 解析失败
+            error_msg = result.get("error", "未知解析错误")
+            logger.error(f"目标解析失败: {error_msg}")
+            
+            return {
+                "status": "error",
+                "error": error_msg,
+                "raw_input": user_input
+            }
+    
+    def _interactive_callback(self, field_info: Dict[str, Any]) -> Any:
+        """交互式解析的回调函数，默认实现仅记录日志
+        实际使用时应由沟通层重写此方法"""
+        field = field_info.get("field", "")
+        question = field_info.get("question", "")
+        options = field_info.get("options", [])
+        
+        logger.info(f"需要用户输入: {question} (选项: {options})")
+        
+        # 返回默认值
+        if field == "task_type" and options:
+            return options[0]  # 返回第一个选项
+        elif field == "success_criteria":
+            return {"primary_metric": {"name": "accuracy", "target_value": 0.9}}
+        
+        return None
+            
+    def enhance_experimental_plan(self, initial_plan, user_task=None, historical_data=None):
+        """增强和优化初始实验方案
+        
+        参数:
+            initial_plan: 初始生成的实验方案
+            user_task: 用户任务信息
+            historical_data: 历史实验数据
+            
+        返回:
+            增强后的实验方案
+        """
+        logger.info("开始增强实验方案...")
+        
+        # 默认值处理
+        if user_task is None:
+            user_task = {}
+        if historical_data is None:
+            historical_data = []
+            
+        # 控制历史数据量，避免传入过多数据
+        if len(historical_data) > 5:
+            historical_data = historical_data[-5:]
+        
+        # 准备任务输入
+        enhancer_task = {
+            "action": "enhance_plan",
+            "initial_plan": initial_plan,
+            "constraints": user_task.get("constraints", {}),
+            "available_resources": {
+                "max_time": user_task.get("max_time", 3600),  # 默认时间限制1小时
+                "max_memory": user_task.get("max_memory", "4GB"),
+                "processors": user_task.get("processors", 1)
+            },
+            "historical_data": historical_data
+        }
+        
+        # 调用任务增强智能体
+        if "task_enhancer" not in self.agent_manager.agents:
+            logger.warning("缺失任务增强智能体，使用原始方案")
+            # 如果不存在增强智能体，返回原始方案
+            initial_plan["enhancement_status"] = "skipped"
+            return initial_plan
+            
+        try:
+            # 分发给任务增强智能体
+            result = self.agent_manager.dispatch("task_enhancer", enhancer_task)
+            
+            if not result.get("success", False):
+                logger.error(f"实验方案增强失败: {result.get('error', '未知错误')}")
+                # 失败时返回原始方案并标记失败
+                initial_plan["enhancement_status"] = "failed"
+                initial_plan["enhancement_error"] = result.get("error", "未知错误")
+                return initial_plan
+                
+            # 获取增强后的方案
+            enhanced_plan = result.get("enhanced_plan", {})
+            enhancements = result.get("enhancements", [])
+            
+            logger.info(f"实验方案增强完成，进行了{len(enhancements)}项改进")
+            for enhancement in enhancements:
+                logger.debug(f"- {enhancement}")
+                
+            # 添加增强状态信息
+            enhanced_plan["enhancement_status"] = "success"
+            enhanced_plan["enhancement_details"] = enhancements
+            
+            return enhanced_plan
+            
+        except Exception as e:
+            logger.exception(f"实验方案增强过程发生异常")
+            # 异常情况下返回原始方案
+            initial_plan["enhancement_status"] = "error"
+            initial_plan["enhancement_error"] = str(e)
+            return initial_plan
 
     @auto_save_state
-    def run_flow(self, user_task: Dict[str, Any]) -> Dict[str, Any]:
+    def run_flow(self, user_task: Dict[str, Any], progress_callback=None) -> Dict[str, Any]:
         experiment_id = user_task.get("experiment_id") or str(uuid.uuid4())
         user_task["experiment_id"] = experiment_id
         logs = []
@@ -55,20 +213,41 @@ class TaskFlow:
                 raise RuntimeError("实验流程已被用户中断")
             
             try:
-                # 1. Run the full experiment flow
+                # 1. 规划阶段：基础任务流程规划
                 task_manager_result = self.agent_manager.dispatch("task_manager", user_task)
                 literature_result = self.agent_manager.dispatch("literature_reader", 
                     {"user_task": user_task, "task_manager": task_manager_result})
                 design_result = self.agent_manager.dispatch("experiment_designer",
                     {"user_task": user_task, "literature": literature_result})
-                robot_result = self.agent_manager.dispatch("robot_operator",
-                    {"design": design_result})
                 
-                # Use experiment_designer for analysis if needed
-                analysis_result = design_result  # Default to design result
-                if "analysis" not in design_result:
+                # 2. 增强阶段：优化实验方案 - 新增
+                if self._should_stop:
+                    raise RuntimeError("实验流程已被用户中断")
+                    
+                logger.info("进入实验方案增强阶段...")
+                enhanced_design = self.enhance_experimental_plan(
+                    initial_plan=design_result,
+                    user_task=user_task,
+                    historical_data=evaluation_history
+                )
+                
+                # 记录增强结果
+                logs.append({
+                    "stage": "enhancement",
+                    "timestamp": time.time(),
+                    "status": enhanced_design.get("enhancement_status", "unknown"),
+                    "details": enhanced_design.get("enhancement_details", [])
+                })
+                
+                # 3. 执行阶段：执行优化后的实验
+                robot_result = self.agent_manager.dispatch("robot_operator",
+                    {"design": enhanced_design})
+                
+                # 使用实验设计智能体进行结果分析
+                analysis_result = enhanced_design  # 默认使用增强后的设计结果
+                if "analysis" not in enhanced_design:
                     analysis_result = self.agent_manager.dispatch("experiment_designer",
-                        {"experiment_data": robot_result})
+                        {"experiment_data": robot_result, "enhanced_design": enhanced_design})
                 
                 # 2. Evaluate results
                 current_score = self._calculate_score(analysis_result)

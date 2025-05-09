@@ -1,128 +1,204 @@
-# AutoLab
-A multi-agent-driven robotic AI autonomous laboratory for research
+<div align="center">
 
-## Installation
+# 🧪 AutoLab
 
-1. Clone this repository:
-   ```
+**智能自主实验系统 | 多智能体驱动 | 先进实验自动化平台**
+
+[![Python 3.9+](https://img.shields.io/badge/Python-3.9%2B-blue)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
+[![Framework: Streamlit](https://img.shields.io/badge/Framework-Streamlit-ff4b4b)](https://streamlit.io/)
+
+*利用AI协作智能体，自动化实验设计、执行和分析*
+
+<p align="center">
+<img src="https://github.com/knifecms/AutoLab/raw/main/docs/assets/autolab-banner.png" alt="AutoLab Banner" width="600"/>
+</p>
+
+</div>
+
+## ✨ 主要特性
+
+- 🤖 **多智能体协作系统** - 多个专业智能体共同完成复杂实验任务
+- 🔍 **结构化目标解析** - 自动解析自然语言实验目标
+- 🔄 **Plan-Enhance-Execute架构** - 三阶段任务执行与优化流程
+- 📊 **实时数据可视化** - 直观监控实验进展与结果
+- 🧠 **自适应实验优化** - 基于历史数据优化实验参数
+- 🧩 **模块化设计** - 易于扩展的插件式架构
+
+## 🛠️ 安装与环境配置
+
+### 安装步骤
+
+1. 克隆仓库：
+   ```bash
    git clone https://github.com/knifecms/AutoLab.git
    cd AutoLab
    ```
-2. Install as editable package:
-   ```
+
+2. 安装依赖：
+   ```bash
    pip install -e .
    ```
-3. Run the application:
-   ```
-   streamlit run autolab/ui/streamlit_app.py
-   ```
 
-## Setup
+## 🔧 环境设置
 
-1. Configure environment variables by creating a `.env` file:
-   ```
+1. 创建环境变量配置：
+   ```bash
    cp .env.example .env
    ```
-2. Edit the `.env` file with your specific configurations
 
-## Usage
+2. 编辑`.env`文件设置你的个人配置
 
-### 1. Start the Backend (FastAPI)
-```
-uvicorn autolab.main:app --reload
-```
-Access API docs at: http://localhost:8000/docs
+3. 配置Python环境变量（必需步骤）：
+   ```bash
+   # Linux/Mac
+   export PYTHONPATH=$(pwd)
+   
+   # Windows (CMD)
+   set PYTHONPATH=%cd%
+   
+   # Windows (PowerShell)
+   $env:PYTHONPATH=(Get-Location).Path
+   ```
 
-### 2. Start the Frontend (Streamlit)
-Open a new terminal and run:
-```
+## 🚀 使用指南
+
+### 启动应用
+
+安装所需依赖后，运行以下命令启动Streamlit应用：
+
+```bash
+# 首先设置PYTHONPATH
+# Windows (PowerShell)
+$env:PYTHONPATH=(Get-Location).Path
+
+# 然后运行Streamlit应用
 streamlit run autolab/ui/streamlit_app.py
 ```
-Access UI at: http://localhost:8501
 
-### Combined Development Command (PowerShell)
+打开浏览器访问：[http://localhost:8501](http://localhost:8501)
+
+### 可选：启动API后端（高级功能）
+
+如果需要使用API功能，可以另外启动FastAPI后端：
+
+```bash
+# 设置PYTHONPATH后运行
+$env:PYTHONPATH=(Get-Location).Path; uvicorn autolab.server.main:app --reload
 ```
-$env:PYTHONPATH=(Get-Location).Path; uvicorn autolab.main:app --reload &
-streamlit run autolab/ui/streamlit_app.py
-```
 
-### Basic Commands
+API文档访问地址：[http://localhost:8000/docs](http://localhost:8000/docs)
 
-- `start`: Initialize all agents and equipment
-- `run_experiment`: Execute a predefined experiment protocol
-- `monitor`: View real-time system status
-- `shutdown`: Safely terminate all processes
+### 系统功能
 
-## Configuration
+通过网页界面，您可以：
 
-Key configuration files:
-- `config/agents.yaml`: Agent behavior parameters
-- `config/equipment.yaml`: Laboratory equipment settings
-- `config/experiments/`: Predefined experiment protocols
-- `config/agent_tools.yaml`: Browser and MCP tool configurations
-- `config/ui_config.yaml`: Visualization interface settings
+- **创建实验**：定义实验目标和参数
+- **运行实验**：执行定义的实验协议
+- **监控进展**：实时追踪实验过程
+- **查看结果**：分析实验数据和生成报告
+- **导出数据**：保存实验结果以便后续分析
 
-### Experiment Targets
+## ⚙️ 系统配置
 
-The system allows configuration of experiment objectives through:
-1. Predefined default objectives
-2. Custom objective definitions
-3. Visual parameter editing
+### 主要配置文件
 
-Configure these in `config/agent_tools.yaml` under the `experiment_targets` section.
+- `config/agents.yaml`: 智能体行为参数配置
+- `config/equipment.yaml`: 实验设备配置
+- `config/experiments/`: 预定义实验协议
+- `config/agent_tools.yaml`: 智能体工具配置
+- `config/ui_config.yaml`: 可视化界面设置
 
-## 实验模板管理
+### 智能架构
 
-AutoLab提供实验模板功能，可保存和复用常用实验配置。
+AutoLab采用先进的**Plan-Enhance-Execute**智能体架构，包含三个核心阶段：
 
-### 使用模板
-1. 在Web界面左侧边栏选择"📁 实验模板"
-2. 从下拉菜单中选择已有模板
-3. 点击"使用模板"按钮
+1. **规划阶段 (Plan)**
+   - 生成初始实验设计
+   - 解析实验目标和需求
+   - 定义成功标准
 
-### 创建新模板
-1. 在模板操作中选择"新建模板"
-2. 输入模板名称
-3. 填写JSON格式的配置（示例）：
-```json
-{
-  "metrics": {
-    "accuracy_threshold": 0.85,
-    "efficiency_threshold": 0.8
-  },
-  "llm": {
-    "model": "llama3",
-    "temperature": 0.7
-  }
-}
-```
-4. 点击"保存"按钮
+2. **增强阶段 (Enhance)**
+   - 对初始设计进行优化
+   - 基于历史数据调整参数
+   - 预测并规避潜在问题
 
-### 编辑模板
-1. 在模板操作中选择"编辑模板"
-2. 修改JSON配置内容
-3. 点击"更新模板"按钮
+3. **执行阶段 (Execute)**
+   - 实施优化后的实验方案
+   - 实时监控进展和调整
+   - 收集和分析数据
 
-模板文件存储在`config/templates/`目录下，可直接管理YAML文件。
+### 结构化目标解析
 
-## 实验评价标准
+AutoLab集成了智能的实验目标解析器，可以：
 
-评价配置在`config/evaluation_config.yaml`中定义，包含：
+- 将自然语言实验描述转换为结构化格式
+- 自动识别任务类型、领域专业和关键指标
+- 定义明确的成功标准和所需资源
+- 提供交互式界面进行目标微调
 
-1. **指标配置**
-   - `weight`: 权重系数
-   - `threshold`: 达标阈值
-   - `description`: 指标说明
+这种方法借鉴了Kaggle竹赛项目架构，大大提高了实验需求的明确度和执行成功率。
 
-2. **评分规则**
-   - `passing_score`: 合格分数线
-   - `penalty`: 各类扣分项
+## 📚 Experiment Templates
 
-3. **评价方式**
-   - `auto`: 自动评分
-   - `manual`: 人工评审
+AutoLab provides a powerful template system for saving and reusing experiment configurations.
 
-示例配置：
+### Using Templates
+
+1. Select "📁 Experiment Templates" in the sidebar
+2. Choose an existing template from the dropdown menu
+3. Click the "Use Template" button to apply it to your experiment
+
+### Creating New Templates
+
+1. Select "Create New Template" from the template operations
+2. Enter a descriptive name for your template
+3. Fill in the configuration in JSON format (example):
+   ```json
+   {
+     "metrics": {
+       "accuracy_threshold": 0.85,
+       "efficiency_threshold": 0.8
+     },
+     "llm": {
+       "model": "llama3",
+       "temperature": 0.7
+     }
+   }
+   ```
+4. Click "Save" to store your template
+
+### Editing Templates
+
+1. Select "Edit Template" from the template operations
+2. Modify the JSON configuration as needed
+3. Click "Update Template" to save your changes
+
+Template files are stored in the `config/templates/` directory and can be managed directly as YAML files.
+
+## 📊 Evaluation Standards
+
+AutoLab uses a flexible evaluation system defined in `config/evaluation_config.yaml` with these key components:
+
+### Metrics Configuration
+
+- **Primary Metrics**: Define critical success factors
+  - `weight`: Importance coefficient (0.0-1.0)
+  - `threshold`: Minimum acceptable value
+  - `description`: Detailed explanation
+
+### Scoring System
+
+- **Pass Criteria**: Configurable success thresholds
+  - `passing_score`: Minimum passing score
+  - `penalty`: Deductions for various issues
+
+### Evaluation Methods
+
+- **Automatic**: AI-driven assessment based on objective criteria
+- **Manual**: Human review for subjective evaluation
+
+Example configuration:
 ```yaml
 metrics:
   accuracy:
