@@ -584,35 +584,8 @@ else:
     st.info("请在上方输入实验目标，然后点击\"开始实验\"按钮。")
     
     # 显示结构化目标的演示
-    if "parsed_goal" in st.session_state:
-        st.subheader("🌀 目标解析器示例")
-        st.info("目标解析器可以理解你的实验需求，自动提取关键信息，帮助系统更好地执行实验。")
-        
-        # 显示示例解析结果
-        demo_goal = {
-            "goal": "对猪肝存储蛋白进行活性测定",
-            "task_type": "measurement",
-            "domain": "生物化学",
-            "confidence": 0.85,
-            "success_criteria": {
-                "primary_metric": {"name": "accuracy", "target_value": 0.95, "unit": "%"},
-                "secondary_metrics": [{"name": "time_cost", "target_value": 30, "unit": "min"}]
-            },
-            "resources": {
-                "required_instruments": ["分光光度计", "离心机", "水浴锅"],
-                "time_limit": 3600,
-            }
-        }
-        
-        with st.container():
-            show_structured_goal(demo_goal)
-            export_structured_goal(st.session_state.get("parsed_goal", {}))
-        
-        # 提供编辑按钮
-        if st.button("⚙️ 自定义实验设置"):
-            st.session_state["show_edit_goal"] = True
-            
-    # 显示编辑面板
+    # （已按用户要求删除演示区块）
+    # 保留后续结构化目标编辑功能
     if st.session_state.get("show_edit_goal", False):
         edited_goal = edit_structured_goal(st.session_state.get("parsed_goal", {}))
         if edited_goal:
@@ -620,6 +593,12 @@ else:
             st.success("结构化目标已更新")
             st.session_state["show_edit_goal"] = False
             st.rerun()
+
+def show_agent_debug_info(result):
+    """展示Agent的debug信息（如有）"""
+    if result and isinstance(result, dict) and 'debug' in result:
+        st.subheader("🪛 Agent Debug 信息")
+        st.json(result['debug'])
 
 # 定义函数才能使用
 def show_agent_status(flow):
