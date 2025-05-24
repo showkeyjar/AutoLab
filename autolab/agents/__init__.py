@@ -6,6 +6,7 @@ from .experiment_designer import ExperimentDesignerAgent
 from .robot_operator import RobotOperatorAgent
 from .computation_executor import ComputationExecutorAgent
 from .task_enhancer import TaskEnhancerAgent
+from .data_acquisition import DataAcquisitionAgent
 
 __all__ = [
     'BaseAgent',
@@ -14,5 +15,6 @@ __all__ = [
     'ExperimentDesignerAgent',
     'RobotOperatorAgent',
     'ComputationExecutorAgent',
-    'TaskEnhancerAgent'  # 添加新的任务增强智能体
+    'TaskEnhancerAgent',  # 添加新的任务增强智能体
+    'DataAcquisitionAgent'
 ]

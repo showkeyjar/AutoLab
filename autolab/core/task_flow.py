@@ -200,10 +200,17 @@ class TaskFlow:
         experiment_id = user_task.get("experiment_id") or str(uuid.uuid4())
         user_task["experiment_id"] = experiment_id
         logs = []
-        evaluation_history = []
+        # evaluation_history will store dicts:
+        # {
+        #   "attempt": attempt_number,
+        #   "model_architecture_used": { ... },
+        #   "structured_metrics": { ... },
+        #   "score": float (optional, can be re-calculated)
+        # }
+        evaluation_history = [] 
         
         # Initialize retry tracking
-        max_attempts = user_task.get("max_attempts", 10)
+        max_attempts = user_task.get("max_attempts", 3) # Reduced for practical testing, can be 10
         previous_actions = set()
         best_result = None
         best_score = -1
@@ -213,92 +220,158 @@ class TaskFlow:
                 raise RuntimeError("实验流程已被用户中断")
             
             try:
-                # 1. 规划阶段：基础任务流程规划
-                task_manager_result = self.agent_manager.dispatch("task_manager", user_task)
-                literature_result = self.agent_manager.dispatch("literature_reader", 
-                    {"user_task": user_task, "task_manager": task_manager_result})
-                design_result = self.agent_manager.dispatch("experiment_designer",
-                    {"user_task": user_task, "literature": literature_result})
+                # 1. 规划阶段：基础任务流程规划 (Done once or if fundamental changes are needed)
+                # For iterative optimization, we use the 'current_design' from the previous loop or initial design.
+                if attempt == 0: # Initial design phase
+                    task_manager_result = self.agent_manager.dispatch("task_manager", user_task)
+                    literature_result = self.agent_manager.dispatch("literature_reader", 
+                        {"user_task": user_task, "task_manager": task_manager_result})
+                    initial_design_result = self.agent_manager.dispatch("experiment_designer",
+                        {"user_task": user_task, "literature": literature_result})
+                    current_design = initial_design_result # This is the 'design_result' structure
+                else:
+                    # On subsequent attempts, current_design is the enhanced_design from previous iteration's TaskEnhancerAgent
+                    pass # current_design is already set from the end of the previous loop
+
+                # Data Acquisition (Potentially done once, or if design changes significantly)
+                # For simplicity, let's assume it's done based on the latest current_design if needed
+                # Or, it could be done once initially if datasets are expected to be stable.
+                # For this flow, let's assume data_acquisition_result is stable after first attempt or passed if needed.
+                if attempt == 0: # Example: run data acquisition only once
+                    logger.info("进入数据获取阶段 (首次尝试)...")
+                    data_acquisition_task = {
+                        "parsed_task_requirements": user_task.get("structured_goal", {}),
+                        "suggested_model_architecture": current_design.get("output", {}).get("design", {}).get("suggested_model_architecture", {})
+                    }
+                    data_acquisition_result = self.agent_manager.dispatch("data_acquisition_agent", data_acquisition_task)
+                    logs.append({
+                        "stage": "data_acquisition", "timestamp": time.time(), "status": data_acquisition_result.get("success"),
+                        "output": data_acquisition_result.get("identified_datasets", [])
+                    })
+                    if not data_acquisition_result.get("success"):
+                        logger.error(f"数据获取失败: {data_acquisition_result.get('error', '未知错误')}")
+                        # Potentially stop flow if data is critical and acquisition fails
                 
-                # 2. 增强阶段：优化实验方案 - 新增
-                if self._should_stop:
-                    raise RuntimeError("实验流程已被用户中断")
-                    
-                logger.info("进入实验方案增强阶段...")
-                enhanced_design = self.enhance_experimental_plan(
-                    initial_plan=design_result,
-                    user_task=user_task,
-                    historical_data=evaluation_history
-                )
+                # Current model architecture to be executed for this attempt
+                current_model_arch_to_execute = current_design.get("output", {}).get("design", {}).get("suggested_model_architecture", {})
+                current_training_params = current_design.get("output", {}).get("design", {}).get("training_parameters", {})
+
+
+                # 3. 执行阶段：执行优化后的实验 (or initial experiment)
+                robot_task_input = {
+                    "design": current_design, # Pass the whole current design which includes procedure, model arch, and potentially training_params
+                    "datasets_info": data_acquisition_result.get("identified_datasets", []), # Assuming this is available
+                    "task_type": user_task.get("structured_goal", {}).get("task_type", "unknown"),
+                    # ComputationExecutor will use suggested_model_architecture and training_parameters from the design
+                }
+                robot_result = self.agent_manager.dispatch("robot_operator", robot_task_input) # robot_operator calls ComputationExecutor
                 
-                # 记录增强结果
                 logs.append({
-                    "stage": "enhancement",
-                    "timestamp": time.time(),
-                    "status": enhanced_design.get("enhancement_status", "unknown"),
-                    "details": enhanced_design.get("enhancement_details", [])
+                    "stage": "execution", "timestamp": time.time(), "attempt": attempt + 1,
+                    "model_architecture_used": current_model_arch_to_execute, # Logging the arch used for this run
+                    "training_parameters_used": current_training_params, # Logging training params used
+                    "robot_output": robot_result.get("output")
                 })
+
+                # Extract structured_metrics from robot_result (which comes from ComputationExecutor)
+                structured_metrics = None
+                if robot_result.get("success") and "executed_experimental_steps" in robot_result.get("output", {}):
+                    for step_output in robot_result["output"]["executed_experimental_steps"]:
+                        if step_output.get("step_name") == "Evaluate Model" and step_output.get("status") == "completed_success":
+                            structured_metrics = step_output.get("structured_metrics")
+                            break
                 
-                # 3. 执行阶段：执行优化后的实验
-                robot_result = self.agent_manager.dispatch("robot_operator",
-                    {"design": enhanced_design})
+                if structured_metrics:
+                    logger.info(f"Attempt {attempt + 1}: Structured metrics extracted: {structured_metrics}")
+                    evaluation_history.append({
+                        "attempt": attempt + 1,
+                        "model_architecture_used": current_model_arch_to_execute,
+                        "training_parameters_used": current_training_params,
+                        "structured_metrics": structured_metrics
+                    })
+                else:
+                    logger.warning(f"Attempt {attempt + 1}: Could not extract structured metrics or evaluation failed.")
+                    # Handle cases where metrics are not available, maybe skip enhancement or use a default
+                    evaluation_history.append({
+                        "attempt": attempt + 1,
+                        "model_architecture_used": current_model_arch_to_execute,
+                        "training_parameters_used": current_training_params,
+                        "structured_metrics": {"error": "Metrics not available or evaluation failed"}
+                    })
+
+
+                # Using structured_metrics for scoring and threshold checking if available
+                # This part might need adjustment based on how _calculate_score and _meets_thresholds use metrics.
+                # For now, let's assume they can work with structured_metrics or a similar format.
+                # analysis_result would ideally be the structured_metrics themselves or a report containing them.
+                # Let's make analysis_result the robot_result for now, and _calculate_score can dive into it.
+                analysis_result = robot_result 
+                current_score = self._calculate_score(analysis_result, structured_metrics) # Pass structured_metrics to score calculation
                 
-                # 使用实验设计智能体进行结果分析
-                analysis_result = enhanced_design  # 默认使用增强后的设计结果
-                if "analysis" not in enhanced_design:
-                    analysis_result = self.agent_manager.dispatch("experiment_designer",
-                        {"experiment_data": robot_result, "enhanced_design": enhanced_design})
-                
-                # 2. Evaluate results
-                current_score = self._calculate_score(analysis_result)
                 if current_score > best_score:
-                    best_result = analysis_result
+                    best_result = analysis_result # Store the whole robot_result
                     best_score = current_score
                 
-                # 3. Check against thresholds
-                if self._meets_thresholds(analysis_result.get("metrics", {}), user_task.get("thresholds")):
+                # Check against thresholds using structured_metrics
+                if self._meets_thresholds(structured_metrics, user_task.get("thresholds")):
+                    logger.info(f"Attempt {attempt + 1} meets thresholds. Ending optimization.")
                     return {
                         "status": "success",
-                        "result": analysis_result,
+                        "result": analysis_result, # This is robot_result
+                        "structured_metrics": structured_metrics,
                         "attempts": attempt + 1,
-                        "logs": logs
+                        "logs": logs,
+                        "evaluation_history": evaluation_history
                     }
                 
-                # 4. Check for manual stop
-                if user_task.get("manual_stop"):
-                    return {
-                        "status": "stopped",
-                        "best_result": best_result,
-                        "attempts": attempt + 1,
-                        "logs": logs
-                    }
+                # If max attempts reached, exit
+                if attempt + 1 >= max_attempts:
+                    logger.info("Max attempts reached. Ending optimization.")
+                    break # Exit loop
+
+                # 2. 增强阶段：优化实验方案 FOR THE NEXT ATTEMPT
+                if self._should_stop:
+                    raise RuntimeError("实验流程已被用户中断 (pre-enhancement)")
+                    
+                logger.info(f"Entering enhancement phase for next attempt (current attempt {attempt + 1})")
+                # Pass current_design (which was executed) to TaskEnhancer as 'initial_plan'
+                # TaskEnhancer will use this to suggest the *next* design.
+                enhancer_task_input = {
+                    "initial_plan": current_design, # The design that was just executed
+                    "user_task": user_task,         # Contains structured_goal, target_metric
+                    "historical_data": evaluation_history # List of all past attempts' arch, params, metrics
+                }
+                enhancer_result = self.enhance_experimental_plan( # This calls agent_manager.dispatch
+                    initial_plan=enhancer_task_input["initial_plan"],
+                    user_task=enhancer_task_input["user_task"],
+                    historical_data=enhancer_task_input["historical_data"]
+                    # Note: enhance_experimental_plan internally calls self.agent_manager.dispatch("task_enhancer", ...)
+                    # The structure of enhancer_task inside enhance_experimental_plan needs to match what TaskEnhancerAgent expects.
+                    # We are directly calling enhance_experimental_plan which then constructs its own task for dispatch.
+                )
                 
-                # 5. Check for repeated actions
-                action_signature = self._get_action_signature(design_result, robot_result)
-                if action_signature in previous_actions:
-                    return {
-                        "status": "repeated_actions",
-                        "best_result": best_result,
-                        "attempts": attempt + 1,
-                        "logs": logs
-                    }
-                previous_actions.add(action_signature)
-                
-                # 6. Check termination conditions
-                termination_condition = self._check_termination_conditions(analysis_result, attempt)
-                if termination_condition:
-                    return {
-                        "status": termination_condition,
-                        "best_result": best_result,
-                        "attempts": attempt + 1,
-                        "logs": logs
-                    }
-                
-                # 7. Add variation for next attempt
-                user_task = self._add_variation(user_task)
-                
+                logs.append({
+                    "stage": "enhancement_suggestion", "timestamp": time.time(), "attempt": attempt + 1,
+                    "enhancer_output_success": enhancer_result.get("success"),
+                    "enhancements_suggested": enhancer_result.get("enhancements", [])
+                })
+
+                if enhancer_result.get("success") and enhancer_result.get("enhanced_plan"):
+                    current_design = enhancer_result["enhanced_plan"] # This new design will be used in the NEXT iteration
+                    logger.info(f"Attempt {attempt + 1}: Enhancement successful. New design prepared for next attempt.")
+                else:
+                    logger.warning(f"Attempt {attempt + 1}: Enhancement failed or no changes suggested. Will retry with current design or stop if stuck.")
+                    # Potentially add logic here to stop if enhancement fails multiple times
+                    # For now, it will just re-use the `current_design` which hasn't been updated.
+
+                # Old checks like repeated_actions, termination_conditions, _add_variation might need rethinking
+                # in the context of LLM-driven enhancement. The LLM is now the "variation" source.
+                # If the LLM keeps suggesting the same thing or things that don't improve, that's a new kind of "stuck".
+
             except Exception as e:
-                logs.append(f"Attempt {attempt + 1} failed: {str(e)}")
+                logger.exception(f"Attempt {attempt + 1} in run_flow failed: {str(e)}")
+                logs.append({"stage": "error", "timestamp": time.time(), "attempt": attempt + 1, "error": str(e)})
+                # Decide if we should break or continue on error. For now, continue to max_attempts.
                 logger.exception(f"任务处理异常: {str(e)}")
                 
         return {
@@ -310,55 +383,94 @@ class TaskFlow:
         
         self._last_state = {
             'current_task': user_task,
-            'attempts': self.attempt_history
+            'attempts': attempt + 1, # Use loop variable
+            'evaluation_history': evaluation_history
         }
         
-    def _calculate_score(self, result: Dict[str, Any]) -> float:
-        """计算任务执行评分"""
-        if not result.get('success', False):
+    def _calculate_score(self, result: Dict[str, Any], structured_metrics: Optional[Dict[str, float]] = None) -> float:
+        """计算任务执行评分.
+        'result' is the raw robot_result.
+        'structured_metrics' is the parsed metrics dict from evaluation step.
+        """
+        if not result.get('success', False): # Check if robot_result itself indicates failure
             return 0.0
-            
-        # 提供完整的默认指标
-        metrics = result.get('metrics', {
-            'accuracy': 0.8,
-            'time_cost': 5.0,
-            'completeness': 0.9
-        })
         
-        # 基础评分逻辑
-        base_score = 0.5 if result.get('output') else 0.1
-        score = base_score + \
-                metrics.get('accuracy', 0.0) * 0.4 + \
-                metrics.get('completeness', 0.0) * 0.1 - \
-                min(metrics.get('time_cost', 0.0), 10) * 0.01
-                
+        if structured_metrics and "error" not in structured_metrics:
+            # Prioritize structured_metrics if available and valid
+            actual_metrics = structured_metrics
+        elif isinstance(result.get('output'), dict) and result['output'].get('metrics'): # Fallback to older metrics format if any
+            actual_metrics = result['output']['metrics']
+            logger.warning("Using fallback metrics from result['output']['metrics'] for scoring.")
+        else:
+            logger.warning("No valid metrics found for scoring in _calculate_score.")
+            return 0.1 # Minimal score if no metrics but overall success
+
+        # Example: Score based on accuracy, penalize loss. Customize as needed.
+        # This scoring should align with the optimization target_metric.
+        score = 0.0
+        if 'accuracy' in actual_metrics:
+            score += actual_metrics['accuracy'] * 0.7 # Weight accuracy heavily
+        if 'loss' in actual_metrics:
+            score += (1 - min(actual_metrics['loss'], 1.0)) * 0.3 # Penalize high loss (assuming loss is capped at 1 for this)
+        
+        # Add other metric considerations if necessary
+        # score += actual_metrics.get('completeness', 0.0) * 0.1 
+        # score -= min(actual_metrics.get('time_cost', 0.0), 10) * 0.01
+
         return max(0.0, min(1.0, score))
 
-    def _meets_thresholds(self, result: Dict[str, Any], thresholds: Dict[str, Any] = None) -> bool:
-        """检查结果是否满足阈值要求"""
-        if not result.get('success', False):
+
+    def _meets_thresholds(self, metrics: Optional[Dict[str, float]], thresholds: Optional[Dict[str, Any]] = None) -> bool:
+        """检查结果是否满足阈值要求.
+        'metrics' should be the structured_metrics dictionary.
+        'thresholds' directly from user_task.
+        """
+        if not metrics or "error" in metrics: # If no metrics or metrics parsing failed
             return False
             
-        # 如果没有指定阈值，默认通过
-        if not thresholds:
-            return True
+        if not thresholds: # If no thresholds defined, then it's considered met for optimization purposes (continue loop)
+            logger.info("No specific thresholds defined by user. Thresholds considered met for loop continuation.")
+            return False # Return False to continue optimization loop if no specific target. Or True if this means "goal achieved".
+                         # For optimization loop, we want to continue if no specific target is set to stop.
+                         # However, if the goal is to "reach a threshold", then True means stop.
+                         # Let's assume for now: if thresholds are set, meeting them means success. If not set, never "success" this way.
+
+        for metric_name, target_value_config in thresholds.items():
+            # Thresholds can be simple values or dicts like {"target_value": 0.9, "operator": ">="}
+            target_value = None
+            operator = ">=" # Default operator
+
+            if isinstance(target_value_config, dict):
+                target_value = target_value_config.get("target_value")
+                operator = target_value_config.get("operator", ">=")
+            else: # Simple value threshold
+                target_value = target_value_config
             
-        # 获取结果中的指标，提供默认值
-        metrics = result.get('metrics', {
-            'accuracy': 0.8,
-            'time_cost': 5.0
-        })
-        
-        # 检查每个阈值
-        for metric, threshold in thresholds.items():
-            if metric not in metrics:
-                logger.warning(f"指标{metric}不存在于结果中")
+            if target_value is None:
+                logger.warning(f"Threshold for metric '{metric_name}' is not properly defined.")
                 continue
-                
-            if metrics[metric] < threshold:
-                logger.info(f"指标{metric}不满足阈值 ({metrics[metric]} < {threshold})")
+
+            current_value = metrics.get(metric_name)
+            if current_value is None:
+                logger.warning(f"Metric '{metric_name}' not found in current results for threshold check.")
+                return False # Metric required by threshold is missing
+
+            logger.info(f"Threshold check: Metric '{metric_name}', Current: {current_value}, Target: {operator} {target_value}")
+            if operator == ">=":
+                if not (current_value >= target_value): return False
+            elif operator == "<=":
+                if not (current_value <= target_value): return False
+            elif operator == ">":
+                if not (current_value > target_value): return False
+            elif operator == "<":
+                if not (current_value < target_value): return False
+            elif operator == "==":
+                if not (current_value == target_value): return False
+            else:
+                logger.warning(f"Unsupported operator '{operator}' for threshold metric '{metric_name}'.")
                 return False
                 
+        logger.info("All defined thresholds met.")
         return True
 
     def _load_evaluation_config(self) -> Dict[str, Any]:
@@ -373,46 +485,27 @@ class TaskFlow:
     def _get_action_signature(self, design_result: Dict[str, Any], robot_result: Dict[str, Any]) -> int:
         """生成动作序列的唯一签名"""
         try:
-            # 将字典转换为可哈希的字符串
-            design_str = json.dumps(design_result, sort_keys=True)
-            robot_str = json.dumps(robot_result, sort_keys=True)
-            return hash(f"{design_str}|{robot_str}")
+            # Signature should be based on the executed model architecture to detect if the same model is tried repeatedly
+            # design_result is the *input* to the current execution round.
+            # robot_result is the *output*.
+            # We care about the executed architecture.
+            # current_design is the one that was executed.
+            executed_arch_str = json.dumps(design_result.get("output",{}).get("design",{}).get("suggested_model_architecture",{}), sort_keys=True)
+            # To truly check for repeated *actions* that lead to same results, might need more complex signature.
+            # For now, checking if the same architecture is being re-evaluated.
+            return hash(executed_arch_str)
         except Exception as e:
             logger.error(f"生成签名失败: {str(e)}")
-            return 0  # 返回默认签名
-        
-    def _add_variation(self, user_task: Dict[str, Any]) -> Dict[str, Any]:
-        """Smart variation based on previous attempts"""
-        if 'variation_history' not in user_task:
-            user_task['variation_history'] = []
-            
-        # Get last variation or initialize
-        last_variation = user_task['variation_history'][-1] if user_task['variation_history'] else {}
-        
-        # Generate new variation with context-aware adjustments
-        new_variation = {
-            'params': {
-                'temperature': last_variation.get('temperature', 0.7) + 0.1,
-                'top_p': max(0.1, last_variation.get('top_p', 0.9) - 0.05)
-            },
-            'attempt': len(user_task['variation_history']) + 1
-        }
-        
-        user_task['variation_history'].append(new_variation)
-        user_task.update(new_variation['params'])
-        return user_task
-        
-    def _check_termination_conditions(self, result: Dict[str, Any], attempt: int) -> Optional[str]:
-        """Additional termination checks"""
-        # Critical failure detection
-        if result.get('error_level', 0) >= 2:
-            return 'critical_failure'
-            
-        # Plateau detection
-        if attempt > 3 and len(set(r['score'] for r in result['history'][-3:])) == 1:
-            return 'performance_plateau'
-            
-        return None
+            return time.time() # Fallback to a unique number if hashing fails
+
+    # _add_variation is likely superseded by TaskEnhancerAgent's suggestions.
+    # If TaskEnhancerAgent fails to provide a new variation, we might need a fallback.
+    # For now, removing _add_variation and _check_termination_conditions as primary loop controllers.
+    # The loop is controlled by max_attempts and _meets_thresholds.
+
+    # def _add_variation(self, user_task: Dict[str, Any]) -> Dict[str, Any]: ...
+    # def _check_termination_conditions(self, result: Dict[str, Any], attempt: int) -> Optional[str]: ...
+
 
     def _get_optimized_params(self, history: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         """基于历史数据优化参数"""
